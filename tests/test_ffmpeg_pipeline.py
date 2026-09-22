@@ -24,6 +24,30 @@ from anime_dubber.core import (
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
 class FfmpegPipelineTests(unittest.TestCase):
+    def test_local_wav_tts_renders_to_distinct_output_and_resumes(self):
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            raw = directory / "raw.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2.0",
+                "-ac", "1", "-ar", "44100", str(raw),
+            ], check=True)
+
+            cfg = Config(source="x", output_dir=directory, tts_engine="chatterbox")
+            segment = Segment(0.0, 0.5, "你好", "Hello")
+            runner = CommandRunner()
+            with patch("anime_dubber.providers.tts.synthesize_chatterbox", side_effect=lambda _text, path, **_kw: shutil.copyfile(raw, path)) as synthesize:
+                first = prepare_tts_clip(segment, 0, directory / "tts", cfg, runner, lambda _m: None)
+                second = prepare_tts_clip(segment, 0, directory / "tts", cfg, runner, lambda _m: None)
+
+            self.assertEqual(first, second)
+            self.assertIn("_processed.wav", first.name)
+            self.assertEqual(synthesize.call_count, 1)
+            self.assertGreater(ffprobe_duration(first, runner), 0.1)
+            self.assertLessEqual(ffprobe_duration(first, runner), 0.53)
+            self.assertFalse(any((directory / "tts").glob("*_rendering.wav")))
+
     def test_timeline_and_music_sfx_mix_keep_duration(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)

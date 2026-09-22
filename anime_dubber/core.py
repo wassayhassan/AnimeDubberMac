@@ -1246,13 +1246,16 @@ def prepare_tts_clip(
     clip_signature = hashlib.sha1(
         json.dumps(signature_data, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()[:12]
-    wav = tts_dir / f"{index:06d}_{clip_signature}.wav"
+    # Local engines emit WAV. Keep the raw and filtered files distinct: ffmpeg
+    # cannot write to its own input, and a failed render must never look cached.
+    wav = tts_dir / f"{index:06d}_{clip_signature}_processed.wav"
     if config.resume and wav.exists() and wav.stat().st_size > 1000 and not config.force:
         return wav
     tts_dir.mkdir(parents=True, exist_ok=True)
 
     suffix = ".aiff" if resolved_tts == "macos" else (".mp3" if resolved_tts == "elevenlabs" else ".wav")
     source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
+    rendering = tts_dir / f"{index:06d}_{clip_signature}_rendering.wav"
 
     if resolved_tts == "chatterbox":
         from .providers.tts import synthesize_chatterbox
@@ -1331,41 +1334,44 @@ def prepare_tts_clip(
         f"aresample={SAMPLE_RATE}",
         "aformat=sample_fmts=s16:channel_layouts=stereo",
     ]
-    runner.run([
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(source_audio),
-        "-af", ",".join(filters),
-        "-ac", "2", "-ar", str(SAMPLE_RATE),
-        "-c:a", "pcm_s16le", str(wav),
-    ])
-
-    # Some extremely short Whisper segments can make aggressive atempo/pitch
-    # filters emit a valid WAV container with zero samples. Validate immediately
-    # while the source TTS audio still exists, then retry with a safe conversion.
     try:
-        rendered_dur = ffprobe_duration(wav, runner)
-        if rendered_dur <= 0.005:
-            raise PipelineError(f"TTS rendered zero-duration audio for segment {index}")
-    except PipelineError:
-        progress(f"Warning: line {index + 1} produced empty filtered audio; retrying without timing compression")
-        safe_filters = [
-            "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB",
-            "afade=t=in:st=0:d=0.012",
-            f"atrim=duration={target_dur:.6f}",
-            f"volume={max(0.1, min(3.0, gain)):.4f}",
-            f"aresample={SAMPLE_RATE}",
-            "aformat=sample_fmts=s16:channel_layouts=stereo",
-        ]
         runner.run([
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(source_audio),
-            "-af", ",".join(safe_filters),
+            "-af", ",".join(filters),
             "-ac", "2", "-ar", str(SAMPLE_RATE),
-            "-c:a", "pcm_s16le", str(wav),
+            "-c:a", "pcm_s16le", str(rendering),
         ])
-        rendered_dur = ffprobe_duration(wav, runner)
-        if rendered_dur <= 0.005:
-            raise PipelineError(f"TTS produced no audio for segment {index}: {text!r}")
+
+        # Very short segments can yield an empty WAV after aggressive filters.
+        # Retry from the untouched source before publishing the clip to cache.
+        try:
+            rendered_dur = ffprobe_duration(rendering, runner)
+            if rendered_dur <= 0.005:
+                raise PipelineError(f"TTS rendered zero-duration audio for segment {index}")
+        except PipelineError:
+            progress(f"Warning: line {index + 1} produced empty filtered audio; retrying without timing compression")
+            safe_filters = [
+                "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB",
+                "afade=t=in:st=0:d=0.012",
+                f"atrim=duration={target_dur:.6f}",
+                f"volume={max(0.1, min(3.0, gain)):.4f}",
+                f"aresample={SAMPLE_RATE}",
+                "aformat=sample_fmts=s16:channel_layouts=stereo",
+            ]
+            runner.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(source_audio),
+                "-af", ",".join(safe_filters),
+                "-ac", "2", "-ar", str(SAMPLE_RATE),
+                "-c:a", "pcm_s16le", str(rendering),
+            ])
+            rendered_dur = ffprobe_duration(rendering, runner)
+            if rendered_dur <= 0.005:
+                raise PipelineError(f"TTS produced no audio for segment {index}: {text!r}")
+        rendering.replace(wav)
+    finally:
+        rendering.unlink(missing_ok=True)
 
     try:
         source_audio.unlink()
