@@ -915,7 +915,16 @@ def separate_dialogue(
 
     devices: List[str]
     if config.demucs_device == "auto":
-        devices = ["mps", "cpu"] if platform.system() == "Darwin" else ["cpu"]
+        if platform.system() == "Darwin":
+            devices = ["mps", "cpu"]
+        else:
+            devices = ["cpu"]
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    devices = ["cuda", "cpu"]
+            except Exception:
+                pass
     else:
         devices = [config.demucs_device]
 
@@ -938,7 +947,7 @@ def separate_dialogue(
                 return vocals, bg
         last_error = (cp.stderr or cp.stdout or "")[-3000:]
         if device != devices[-1]:
-            progress("Demucs MPS failed; retrying on CPU for compatibility…")
+            progress(f"Demucs {device} failed; retrying on {devices[-1]} for compatibility…")
     raise PipelineError(f"Demucs could not separate the soundtrack.\n{last_error or ''}")
 
 
