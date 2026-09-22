@@ -32,8 +32,8 @@ _STAGE_PATTERNS = [
     ("transcribing", ("Transcribing", "Whisper transcription")),
     ("translating", ("Translating", "translation LLM", "Whisper translation")),
     ("analyzing_characters", ("Analyzing characters", "speaker", "Character map")),
-    ("synthesizing", ("Generating English voice", "Synthesizing", "TTS")),
-    ("mixing", ("Rendering English", "Restoring original", "Mixing English")),
+    ("synthesizing", ("Generating English voice", "Generating dub voice", "Synthesizing", "TTS")),
+    ("mixing", ("Rendering English", "Restoring original", "Mixing English", "Mixing dub")),
     ("exporting", ("Creating final", "mux")),
 ]
 
@@ -78,7 +78,7 @@ def progress_to_event(message: str, job_id: str) -> AppEvent:
 
     data: Dict[str, Any] = {"stage": stage, "title": last_line or "Working"}
 
-    voice_match = re.search(r"Generating English voice:\s*(\d+)\s*/\s*(\d+)", last_line, re.I)
+    voice_match = re.search(r"Generating (?:English|dub) voice:\s*(\d+)\s*/\s*(\d+)", last_line, re.I)
     if voice_match:
         done = int(voice_match.group(1))
         total = max(1, int(voice_match.group(2)))

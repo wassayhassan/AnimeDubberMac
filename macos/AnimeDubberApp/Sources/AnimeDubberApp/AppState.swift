@@ -5,9 +5,12 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppState: ObservableObject {
-    @Published var selection: SidebarDestination? = .newDub
+    @Published var selection: SidebarDestination? = .projects
 
-    @Published var source = "https://youtu.be/WH9x3hYwPj0"
+    @Published var source = ""
+    @Published var projectName = ""
+    @Published var dubName = ""
+    @Published var targetLanguage = "en"
     @Published var outputFolder = "~/Movies/AnimeDubber"
     @Published var seriesID = "10000-years-cultivation"
     @Published var outputMode: OutputMode = .dub
@@ -57,6 +60,11 @@ final class AppState: ObservableObject {
 
     @Published var projects: [ProjectSummary] = []
     @Published var selectedProjectID: String?
+    @Published var showingDeleteConfirmation = false
+
+    var currentProject: ProjectSummary? {
+        projects.first { $0.id == selectedProjectID }
+    }
 
     @Published var characterMaps: [CharacterMapSummary] = []
     @Published var selectedCharacterMapPath: String?
@@ -80,7 +88,7 @@ final class AppState: ObservableObject {
 
     var canStartJob: Bool {
         guard case .ready = backendState else { return false }
-        return !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && activeJobID == nil
+        return currentProject != nil && activeJobID == nil
     }
 
     var settingsSnapshot: SettingsSnapshot {
@@ -251,16 +259,18 @@ final class AppState: ObservableObject {
     }
 
     func startJob(analysis: Bool) {
-        guard canStartJob else { return }
+        guard canStartJob, let project = currentProject else { return }
 
         savePreferences()
         let threshold: Any = speakerThreshold == 0 ? NSNull() : speakerThreshold
 
         let params: [String: Any] = [
-            "source": source,
-            "output_dir": outputFolder,
-            "series_id": seriesID,
+            "source": project.source,
+            "output_dir": project.outputDir,
+            "series_id": project.seriesID,
             "mode": outputMode.rawValue,
+            "target_language": targetLanguage,
+            "dub_name": dubName,
             "asr": [
                 "provider": asrProvider.rawValue,
                 "model": fasterWhisperModel,
@@ -343,10 +353,92 @@ final class AppState: ObservableObject {
         }
     }
 
-    func useProject(_ project: ProjectSummary) {
+    func createProject() {
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusText = "Choose a source video first."
+            return
+        }
+        do {
+            _ = try backend.send(method: "create_project", params: [
+                "source": source.trimmingCharacters(in: .whitespacesAndNewlines),
+                "output_dir": outputFolder,
+                "name": projectName,
+                "series_id": seriesID,
+            ], id: "create-project-\(UUID().uuidString)")
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func saveProjectSettings() {
+        guard let project = currentProject else { return }
+        do {
+            _ = try backend.send(method: "update_project", params: [
+                "project_id": project.id, "output_dir": project.outputDir,
+                "name": projectName, "series_id": seriesID,
+            ], id: "update-project-\(UUID().uuidString)")
+        } catch { statusText = error.localizedDescription }
+    }
+
+    func openProject(_ project: ProjectSummary) {
+        selectedProjectID = project.id
         source = project.source
         outputFolder = project.outputDir
         seriesID = project.seriesID
+        projectName = project.name
+        selection = .overview
+    }
+
+    func newProject() {
+        selectedProjectID = nil
+        source = ""
+        projectName = ""
+        selection = .newProject
+    }
+
+    func selectDub(_ dub: DubSummary) {
+        targetLanguage = dub.language
+        selection = .dub(dub.id)
+    }
+
+    func regenerate(_ dub: DubSummary) {
+        targetLanguage = dub.language
+        dubName = dub.name + " (new version)"
+        let config = dub.config
+        translationProvider = TranslationProvider(rawValue: config["translation"] as? String ?? "") ?? translationProvider
+        voiceProvider = VoiceProvider(rawValue: config["tts_engine"] as? String ?? "") ?? voiceProvider
+        asrProvider = ASRProvider(rawValue: config["asr_provider"] as? String ?? "") ?? asrProvider
+        fasterWhisperModel = config["faster_whisper_model"] as? String ?? fasterWhisperModel
+        ollamaModel = config["ollama_model"] as? String ?? ollamaModel
+        ollamaURL = config["ollama_url"] as? String ?? ollamaURL
+        fallbackVoice = config["voice"] as? String ?? fallbackVoice
+        chatterboxReferenceAudio = config["chatterbox_reference_audio"] as? String ?? chatterboxReferenceAudio
+        chatterboxExpressiveness = (config["chatterbox_expressiveness"] as? NSNumber)?.doubleValue ?? chatterboxExpressiveness
+        chatterboxTurbo = config["chatterbox_turbo"] as? Bool ?? chatterboxTurbo
+        kokoroVoice = config["kokoro_voice"] as? String ?? kokoroVoice
+        piperModel = config["piper_model"] as? String ?? piperModel
+        elevenLabsVoiceID = config["elevenlabs_voice_id"] as? String ?? elevenLabsVoiceID
+        detectCharacters = config["multi_character"] as? Bool ?? detectCharacters
+        speakerBackend = config["speaker_backend"] as? String ?? speakerBackend
+        backgroundVolume = (config["background_volume"] as? NSNumber)?.doubleValue ?? backgroundVolume
+        dubVolume = (config["dub_volume"] as? NSNumber)?.doubleValue ?? dubVolume
+        backgroundDucking = config["ducking"] as? Bool ?? backgroundDucking
+        selection = .newDub
+    }
+
+    func deleteDub(_ dub: DubSummary) {
+        guard let project = currentProject else { return }
+        do {
+            _ = try backend.send(method: "delete_dub", params: [
+                "output_dir": project.outputDir, "project_id": project.id, "dub_id": dub.id,
+            ], id: "delete-dub-\(UUID().uuidString)")
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func useProject(_ project: ProjectSummary) {
+        openProject(project)
         selection = .newDub
     }
 
@@ -584,9 +676,20 @@ final class AppState: ObservableObject {
             } else if id.hasPrefix("projects-") {
                 let rows = resultAny as? [[String: Any]] ?? []
                 projects = rows.compactMap(ProjectSummary.init(dictionary:))
-                if selectedProjectID == nil {
-                    selectedProjectID = projects.first?.id
+                if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
+                    self.selectedProjectID = nil
+                    selection = .projects
                 }
+            } else if id.hasPrefix("create-project-") {
+                selectedProjectID = result["project_id"] as? String
+                selection = .overview
+                refreshProjects()
+            } else if id.hasPrefix("update-project-") {
+                statusText = "Project saved"
+                refreshProjects()
+            } else if id.hasPrefix("delete-dub-") {
+                selection = .dubs
+                refreshProjects()
             } else if id.hasPrefix("character-maps-") {
                 let rows = resultAny as? [[String: Any]] ?? []
                 characterMaps = rows.compactMap(CharacterMapSummary.init(dictionary:))
@@ -649,6 +752,7 @@ final class AppState: ObservableObject {
             let kind = data["kind"] as? String ?? "output"
             let path = data["path"] as? String ?? ""
             activity.append(ActivityEntry(kind: .artifact, message: "\(kind): \(path)"))
+            refreshProjects()
 
         case "error":
             activity.append(ActivityEntry(kind: .error, message: data["message"] as? String ?? "Backend error"))

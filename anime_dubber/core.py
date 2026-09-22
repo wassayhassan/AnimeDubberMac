@@ -108,6 +108,9 @@ class Config:
     source: str
     output_dir: Path
     mode: str = "dub"  # subtitles|dub
+    target_language: str = "en"
+    source_language: str = "zh"
+    version_id: str = ""
     asr_provider: str = "auto"  # auto|mlx_whisper|faster_whisper
     faster_whisper_model: str = "large-v3"
     faster_whisper_device: str = "auto"  # auto|cpu|cuda
@@ -310,6 +313,19 @@ def write_srt(segments: Sequence[Segment], path: Path, translated: bool = False)
             n += 1
 
 
+def write_vtt(segments: Sequence[Segment], path: Path, translated: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("WEBVTT\n\n")
+        for seg in segments:
+            value = ((seg.translated if translated else seg.text) or "").strip()
+            if not value or not (math.isfinite(seg.start) and math.isfinite(seg.end)) or seg.end <= seg.start:
+                continue
+            start = srt_timestamp(seg.start).replace(",", ".")
+            end = srt_timestamp(seg.end).replace(",", ".")
+            handle.write(f"{start} --> {end}\n{value}\n\n")
+
+
 def ffprobe_duration(path: Path, runner: CommandRunner) -> float:
     cp = runner.run([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -480,8 +496,10 @@ def translate_with_llm(
     runner: CommandRunner,
     progress: ProgressCallback,
 ) -> List[Segment]:
+    target = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "ja": "Japanese"}[config.target_language]
     translation_signature = hashlib.sha1(json.dumps({
         "model": LLM_MODEL,
+        "target_language": config.target_language,
         "context": config.context,
         "glossary": config.glossary,
         "source_text": [s.text for s in segments],
@@ -527,12 +545,12 @@ def translate_with_llm(
         ids = pending[off:off + batch_size]
         payload = [{"id": i, "text": segments[i].text} for i in ids]
         prompt = (
-            "Translate the following Chinese dialogue into natural concise English for an episodic xianxia/cultivation animation.\n"
+            f"Translate the following Chinese dialogue into natural concise {target} for an episodic xianxia/cultivation animation.\n"
             "Rules:\n"
-            "1. Return ONLY a JSON array of objects with exactly the same ids, each shaped {\"id\": number, \"text\": \"English\"}.\n"
+            f"1. Return ONLY a JSON array of objects with exactly the same ids, each shaped {{\"id\": number, \"text\": \"{target}\"}}.\n"
             "2. Do not omit, merge, summarize, explain, or add dialogue.\n"
             "3. Keep proper names, sect names, realm names, and terminology consistent.\n"
-            "4. Prefer short spoken English so dubbing can fit the original timing.\n"
+            f"4. Prefer short spoken {target} so dubbing can fit the original timing.\n"
             f"Context: {config.context}\n"
             f"Glossary: {gl}\n"
             f"Input: {json.dumps(payload, ensure_ascii=False)}"
@@ -548,7 +566,7 @@ def translate_with_llm(
         missing = [i for i in ids if i not in parsed]
         for i in missing:
             one_prompt = (
-                "Translate this Chinese xianxia dialogue into concise natural English. Return ONLY the English translation, no quotes or explanation.\n"
+                f"Translate this Chinese xianxia dialogue into concise natural {target}. Return ONLY the translation, no quotes or explanation.\n"
                 f"Context: {config.context}\nGlossary: {gl}\nChinese: {segments[i].text}"
             )
             raw = generate_text(one_prompt, max_tokens=256).strip()
@@ -573,10 +591,12 @@ def translate_with_ollama_provider(
     runner: CommandRunner,
     progress: ProgressCallback,
 ) -> List[Segment]:
+    target = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "ja": "Japanese"}[config.target_language]
     from .providers.translation import translate_with_ollama
 
     translation_signature = hashlib.sha1(json.dumps({
         "provider": "ollama",
+        "target_language": config.target_language,
         "model": config.ollama_model,
         "url": config.ollama_url,
         "context": config.context,
@@ -605,14 +625,14 @@ def translate_with_ollama_provider(
         ids = pending[off:off + batch_size]
         payload = [{"id": i, "text": segments[i].text} for i in ids]
         prompt = (
-            "Translate the following Chinese dialogue into natural concise English for an episodic "
+            f"Translate the following Chinese dialogue into natural concise {target} for an episodic "
             "xianxia/cultivation animation.\n"
             "Rules:\n"
             "1. Return ONLY a JSON array of objects with exactly the same ids, each shaped "
-            "{\"id\": number, \"text\": \"English\"}.\n"
+            f"{{\"id\": number, \"text\": \"{target}\"}}.\n"
             "2. Do not omit, merge, summarize, explain, or add dialogue.\n"
             "3. Keep proper names, sect names, realm names, and terminology consistent.\n"
-            "4. Prefer short spoken English so dubbing can fit the original timing.\n"
+            f"4. Prefer short spoken {target} so dubbing can fit the original timing.\n"
             f"Context: {config.context}\n"
             f"Glossary: {gl}\n"
             f"Input: {json.dumps(payload, ensure_ascii=False)}"
@@ -621,8 +641,8 @@ def translate_with_ollama_provider(
 
     def single_prompt(idx: int) -> str:
         return (
-            "Translate this Chinese xianxia dialogue into concise natural English. "
-            "Return ONLY the English translation, no quotes or explanation.\n"
+            f"Translate this Chinese xianxia dialogue into concise natural {target}. "
+            "Return ONLY the translation, no quotes or explanation.\n"
             f"Context: {config.context}\n"
             f"Glossary: {gl}\n"
             f"Chinese: {segments[idx].text}"
@@ -1167,6 +1187,11 @@ def prepare_tts_clip(
     kokoro_voice = str(profile.get("kokoro_voice", "") or config.kokoro_voice).strip()
     profile_engine = str(profile.get("tts_provider", "") or "").strip().lower()
     resolved_tts = profile_engine if profile_engine and profile_engine != "inherit" else config.tts_engine
+    if config.target_language != "en" and resolved_tts != "elevenlabs":
+        raise PipelineError(
+            f"Character {seg.speaker_id or index} uses {resolved_tts}, but non-English dubbing "
+            "currently requires an ElevenLabs multilingual voice. Update the character voice override."
+        )
 
     if resolved_tts == "auto":
         from .providers.tts import chatterbox_available, kokoro_available, piper_available
@@ -1376,7 +1401,7 @@ def render_dub_timeline(
     progress: ProgressCallback,
 ) -> Path:
     timeline_signature = hashlib.sha1(json.dumps({
-        "segments": [[round(s.start, 3), round(s.end, 3), p.name] for s, p in zip(segments, clips)],
+        "segments": [[round(s.start, 3), round(s.end, 3), str(p)] for s, p in zip(segments, clips)],
         "duration": round(total_duration, 3),
         "chunk_seconds": int(config.chunk_seconds),
     }, sort_keys=True).encode("utf-8")).hexdigest()[:12]
@@ -1599,7 +1624,7 @@ def mix_background_and_dub(
 ) -> Path:
     mix_signature = hashlib.sha1(json.dumps({
         "background": [background.name, background.stat().st_size],
-        "dub": [dub.name, dub.stat().st_size],
+        "dub": [str(dub), dub.stat().st_size],
         "background_volume": config.background_volume,
         "dub_volume": config.dub_volume,
         "ducking": config.ducking,
@@ -1607,7 +1632,7 @@ def mix_background_and_dub(
     out = work_dir / f"mixed_english_{mix_signature}.m4a"
     if config.resume and out.exists() and out.stat().st_size > 1000 and not config.force:
         return out
-    progress("Mixing English dialogue with original music and sound effects…")
+    progress("Mixing dub dialogue with original music and sound effects…")
 
     bg_duration = ffprobe_duration(background, runner)
     if config.ducking:
@@ -1645,7 +1670,7 @@ def mix_background_and_dub(
 
 def mux_video(video: Path, audio: Path, final: Path, runner: CommandRunner, progress: ProgressCallback) -> None:
     final.parent.mkdir(parents=True, exist_ok=True)
-    progress("Creating final English-dubbed MP4…")
+    progress("Creating final dubbed MP4…")
     cp = runner.run([
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(video), "-i", str(audio),
@@ -1737,11 +1762,18 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     out.mkdir(parents=True, exist_ok=True)
     key = source_key(config.source)
     work = out / ".anime_dubber_work" / key
+    version_dir = out / "versions" / config.version_id if config.version_id else out
+    version_dir.mkdir(parents=True, exist_ok=True)
+    def publish(kind: str, path: Path, language: str) -> None:
+        callback = getattr(runner, "artifact", None)
+        if callback:
+            callback(kind, path, language)
     if config.force and work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=True)
 
     video = download_source(config.source, work, runner, progress)
+    publish("source_video", video, config.source_language)
     audio = extract_audio(video, work, runner, progress, config)
 
     if config.mode == "dub":
@@ -1757,6 +1789,10 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         raise PipelineError("No Mandarin speech segments were detected. Try the original soundtrack, a different source, or --force to rebuild cached separation.")
     zh_srt = out / f"{key}_zh.srt"
     write_srt(zh_segments, zh_srt, translated=False)
+    zh_vtt = out / f"{key}_zh.vtt"
+    write_vtt(zh_segments, zh_vtt, translated=False)
+    publish("chinese_srt", zh_srt, "zh")
+    publish("chinese_vtt", zh_vtt, "zh")
 
     translation_mode = config.translation
     if translation_mode == "auto":
@@ -1767,7 +1803,9 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             except Exception:
                 translation_mode = "whisper"
         else:
-            translation_mode = "whisper"
+            translation_mode = "ollama" if config.target_language != "en" else "whisper"
+    if config.target_language != "en" and translation_mode == "whisper":
+        raise PipelineError("Whisper direct translation only supports English; choose LLM or Ollama.")
 
     if translation_mode == "llm":
         segments = translate_with_llm(zh_segments, config, work, runner, progress)
@@ -1808,17 +1846,28 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         profile_map = _profile_dict(profiles)
         progress(f"Character map: {char_path}")
 
-    en_srt = out / f"{key}_en.srt"
+    en_srt = version_dir / f"{key}_{config.target_language}.srt"
     write_srt(segments, en_srt, translated=True)
-    results: Dict[str, Path] = {"chinese_srt": zh_srt, "english_srt": en_srt}
+    en_vtt = version_dir / f"{key}_{config.target_language}.vtt"
+    write_vtt(segments, en_vtt, translated=True)
+    publish("translated_srt", en_srt, config.target_language)
+    publish("translated_vtt", en_vtt, config.target_language)
+    results: Dict[str, Path] = {"chinese_srt": zh_srt, "chinese_vtt": zh_vtt,
+                                "translated_srt": en_srt, "translated_vtt": en_vtt}
+    if config.target_language == "en":
+        results["english_srt"] = en_srt
     if profiles:
-        results["character_map"] = char_path
+        snapshot_map = version_dir / f"{key}_characters.json" if config.version_id else char_path
+        if snapshot_map != char_path:
+            shutil.copy2(char_path, snapshot_map)
+        results["character_map"] = snapshot_map
+        publish("character_map", snapshot_map, config.target_language)
 
     if config.mode == "subtitles":
         progress(f"DONE: {en_srt}")
         return results
 
-    tts_dir = work / f"tts_{config.tts_engine}"
+    tts_dir = work / f"tts_{config.tts_engine}_{config.version_id}" if config.version_id else work / f"tts_{config.tts_engine}"
     clips: List[Path] = []
     total_lines = len(segments)
     for i, seg in enumerate(segments):
@@ -1827,18 +1876,26 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         clips.append(prepare_tts_clip(seg, i, tts_dir, config, runner, progress, profile=profile))
         if (i + 1) % 5 == 0 or i + 1 == total_lines:
             who = f" ({seg.speaker_id}, {seg.style})" if seg.speaker_id else ""
-            progress(f"Generating English voice: {i + 1}/{total_lines}{who}")
+            progress(f"Generating dub voice: {i + 1}/{total_lines}{who}")
 
     total_duration = ffprobe_duration(audio, runner)
+    duration_callback = getattr(runner, "duration", None)
+    if duration_callback:
+        duration_callback(total_duration)
     dub_timeline = render_dub_timeline(segments, clips, total_duration, work, config, runner, progress)
     background_bed = build_dialogue_safe_background(
         audio, background, zh_segments, total_duration, work, config, runner, progress
     )
     mixed = mix_background_and_dub(background_bed, dub_timeline, work, config, runner, progress)
-    final = out / f"{key}_EN_DUB.mp4"
+    final = version_dir / f"{key}_{config.target_language.upper()}_DUB.mp4"
     mux_video(video, mixed, final, runner, progress)
     results["dubbed_video"] = final
-    results["dub_audio"] = mixed
+    exported_audio = version_dir / f"{key}_{config.target_language.upper()}_DUB.m4a"
+    if mixed != exported_audio:
+        shutil.copy2(mixed, exported_audio)
+    results["dub_audio"] = exported_audio
+    publish("dubbed_video", final, config.target_language)
+    publish("dub_audio", exported_audio, config.target_language)
 
     metadata = {
         "source": config.source,
@@ -1859,7 +1916,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         "demucs_model": DEMUCS_MODEL,
         "glossary": config.glossary,
     }
-    (out / f"{key}_run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    (version_dir / f"{key}_run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if not config.keep_work:
         try:
@@ -1868,4 +1925,3 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             progress(f"Warning: could not remove work directory: {work}")
     progress(f"DONE: {final}")
     return results
-

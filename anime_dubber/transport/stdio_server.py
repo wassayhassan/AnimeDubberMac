@@ -75,6 +75,21 @@ def serve() -> int:
                 result = service.list_jobs()
             elif method == "list_projects":
                 result = service.list_projects(str(params.get("output_dir") or ""))
+            elif method == "create_project":
+                result = service.create_project(
+                    str(params.get("output_dir") or ""), str(params.get("source") or ""),
+                    str(params.get("name") or ""), str(params.get("series_id") or ""),
+                )
+            elif method == "update_project":
+                result = service.update_project(
+                    str(params.get("output_dir") or ""), str(params.get("project_id") or ""),
+                    str(params.get("name") or ""), str(params.get("series_id") or ""),
+                )
+            elif method == "delete_dub":
+                result = service.delete_dub(
+                    str(params.get("output_dir") or ""), str(params.get("project_id") or ""),
+                    str(params.get("dub_id") or ""),
+                )
             elif method == "get_project":
                 result = service.get_project(
                     str(params.get("output_dir") or ""),

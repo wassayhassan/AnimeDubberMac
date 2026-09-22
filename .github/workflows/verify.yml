@@ -1,0 +1,21 @@
+name: Verify project workspace
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run backend tests
+        run: python -m unittest discover -s tests -q
+  macos-ui:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native app
+        run: swift build --package-path macos/AnimeDubberApp

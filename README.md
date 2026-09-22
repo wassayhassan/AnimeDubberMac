@@ -1,5 +1,7 @@
 # AnimeDubber v4 alpha
 
+The next workspace version uses **Project → Source → Subtitles → Dub versions → Outputs**. See [project workspace design and migration](docs/PROJECT_WORKSPACE_VNEXT.md) for the UI audit, versioned output structure, legacy migration and language/provider limits.
+
 AnimeDubber turns Chinese animation / manhua-drama videos into English-subtitled or English-dubbed videos while preserving the original soundtrack as much as possible.
 
 The architecture is now:
@@ -264,3 +266,14 @@ Shared:
 - FFmpeg
 - yt-dlp
 - optional ElevenLabs TTS
+
+## Project workspace CLI
+
+```bash
+python -m anime_dubber.cli new-project /path/to/source.mp4 -o ~/Movies/AnimeDubber --name "Episode 1"
+python -m anime_dubber.cli run /path/to/source.mp4 -o ~/Movies/AnimeDubber --dub-name "English — Chatterbox" --tts chatterbox
+python -m anime_dubber.cli run /path/to/source.mp4 -o ~/Movies/AnimeDubber --subtitles-only --target-language es --translation ollama
+python -m anime_dubber.cli projects -o ~/Movies/AnimeDubber
+```
+
+Each `run` creates a version. Its translated SRT/VTT appears under `versions/<version-id>/` before dubbing finishes. Non-English dub audio currently requires `--tts elevenlabs` and a multilingual ElevenLabs voice; for other languages without that provider, use `--subtitles-only`.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -43,6 +45,28 @@ def _atomic_write(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+def _upgrade(data: dict) -> dict:
+    if data.get("schema_version") == 2:
+        return data
+    artifacts = dict(data.get("artifacts") or {})
+    data["schema_version"] = 2
+    data.setdefault("name", "")
+    data.setdefault("subtitles", {})
+    if "dubbed_video" in artifacts and not data.get("dubs"):
+        data["dubs"] = [{
+            "id": "legacy", "name": "English — Legacy", "language": "en",
+            "source_language": "zh", "status": data.get("status", "completed"),
+            "stage": data.get("stage", "completed"),
+            "created_at": data.get("created_at", ""),
+            "updated_at": data.get("updated_at", ""),
+            "config": data.get("config") or {}, "artifacts": artifacts,
+            "warnings": [], "error": data.get("last_error"),
+        }]
+    else:
+        data.setdefault("dubs", [])
+    return data
+
+
 class ProjectStore:
     """Small durable manifest used by both SwiftUI and CLI.
 
@@ -60,13 +84,46 @@ class ProjectStore:
     def load(self) -> dict:
         try:
             data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
+            return _upgrade(data) if isinstance(data, dict) else {}
         except Exception:
             return {}
 
-    def begin(self, *, job_id: str, kind: str, config: Dict[str, Any]) -> dict:
+    def create(self, *, source: str, name: str = "", series_id: str = "") -> dict:
+        if not source.strip():
+            raise ValueError("source is required")
+        old = self.load()
+        if old:
+            if old.get("source") and old["source"] != source:
+                raise ValueError("A project with this ID already has a different source")
+            return old
+        now = _now()
+        data = {
+            "schema_version": 2, "project_id": self.project_id,
+            "source": source, "name": name.strip(), "series_id": series_id,
+            "output_dir": str(self.output_dir), "status": "ready", "stage": "ready",
+            "stage_title": "Ready", "progress": None, "active_job_id": None,
+            "created_at": now, "updated_at": now, "config": {},
+            "artifacts": {}, "subtitles": {}, "dubs": [], "warnings": [],
+            "last_error": None, "runs": [],
+        }
+        _atomic_write(self.manifest_path, data)
+        return data
+
+    def rename(self, name: str, series_id: str) -> dict:
+        payload = self.load()
+        if not payload:
+            raise FileNotFoundError(self.project_id)
+        payload["name"] = name.strip()
+        payload["series_id"] = series_id.strip()
+        payload["updated_at"] = _now()
+        _atomic_write(self.manifest_path, payload)
+        return payload
+
+    def begin(self, *, job_id: str, kind: str, config: Dict[str, Any], dub_id: str = "", name: str = "") -> dict:
         now = _now()
         old = self.load()
+        if old.get("source") and old["source"] != str(config.get("source") or ""):
+            raise ValueError("A different source video already uses this project ID in this output folder. Choose a different output folder.")
         created_at = old.get("created_at") or now
         runs = list(old.get("runs") or [])
         runs.append({
@@ -78,10 +135,11 @@ class ProjectStore:
         runs = runs[-20:]
 
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "project_id": self.project_id,
             "source": str(config.get("source") or ""),
             "series_id": str(config.get("series_id") or ""),
+            "name": old.get("name") or "",
             "output_dir": str(self.output_dir),
             "status": "running",
             "stage": "preparing",
@@ -92,10 +150,22 @@ class ProjectStore:
             "updated_at": now,
             "config": _redacted_config(config),
             "artifacts": dict(old.get("artifacts") or {}),
+            "subtitles": dict(old.get("subtitles") or {}),
+            "dubs": list(old.get("dubs") or []),
             "warnings": list(old.get("warnings") or [])[-50:],
             "last_error": None,
             "runs": runs,
         }
+        if dub_id:
+            payload["dubs"].append({
+                "id": dub_id, "name": name or f"{config.get('target_language', 'en').upper()} dub",
+                "language": config.get("target_language", "en"),
+                "source_language": config.get("source_language", "zh"),
+                "status": "running", "stage": "preparing", "created_at": now,
+                "updated_at": now, "job_id": job_id, "config": _redacted_config(config),
+                "artifacts": {}, "warnings": [], "error": None,
+                "sync": "Speech clips start at source subtitle timestamps and are trimmed or time-stretched to their source windows.",
+            })
         _atomic_write(self.manifest_path, payload)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         return payload
@@ -115,7 +185,38 @@ class ProjectStore:
             payload["stage_title"] = title
         payload["progress"] = progress
         payload["updated_at"] = _now()
+        for dub in payload.get("dubs", []):
+            if dub.get("job_id") == payload.get("active_job_id"):
+                dub["stage"] = stage
+                dub["updated_at"] = payload["updated_at"]
         _atomic_write(self.manifest_path, payload)
+
+    def publish_artifact(self, kind: str, path: str, *, dub_id: str = "", version_id: str = "", language: str = "en") -> None:
+        payload = self.load()
+        if not payload:
+            return
+        path = str(path)
+        payload.setdefault("artifacts", {})[kind] = path
+        if kind.endswith("_srt") or kind.endswith("_vtt"):
+            key = f"{version_id}:{language}" if version_id else language
+            subtitle = payload.setdefault("subtitles", {}).setdefault(key, {
+                "language": language, "created_at": _now(), "artifacts": {},
+            })
+            subtitle.setdefault("artifacts", {})[kind] = path
+        for dub in payload.get("dubs", []):
+            if dub.get("id") == dub_id:
+                dub.setdefault("artifacts", {})[kind] = path
+        payload["updated_at"] = _now()
+        _atomic_write(self.manifest_path, payload)
+
+    def set_duration(self, dub_id: str, seconds: float) -> None:
+        payload = self.load()
+        for dub in payload.get("dubs", []):
+            if dub.get("id") == dub_id:
+                dub["duration"] = round(seconds, 3)
+                payload["updated_at"] = _now()
+                _atomic_write(self.manifest_path, payload)
+                return
 
     def append_log(self, message: str) -> None:
         text = str(message).replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
@@ -127,13 +228,16 @@ class ProjectStore:
             for line in text.splitlines() or [text]:
                 handle.write(f"{stamp} {line}\n")
 
-    def add_warning(self, message: str) -> None:
+    def add_warning(self, message: str, dub_id: str = "") -> None:
         payload = self.load()
         if not payload:
             return
         warnings = list(payload.get("warnings") or [])
         warnings.append({"timestamp": _now(), "message": str(message)})
         payload["warnings"] = warnings[-50:]
+        for dub in payload.get("dubs", []):
+            if dub.get("id") == dub_id:
+                dub.setdefault("warnings", []).append(str(message))
         payload["updated_at"] = _now()
         _atomic_write(self.manifest_path, payload)
 
@@ -143,6 +247,7 @@ class ProjectStore:
         status: str,
         artifacts: Optional[Dict[str, str]] = None,
         error: Optional[str] = None,
+        dub_id: str = "",
     ) -> None:
         payload = self.load()
         if not payload:
@@ -159,6 +264,10 @@ class ProjectStore:
             merged = dict(payload.get("artifacts") or {})
             merged.update({str(k): str(v) for k, v in artifacts.items()})
             payload["artifacts"] = merged
+        for dub in payload.get("dubs", []):
+            if dub.get("id") == dub_id:
+                dub.update(status=status, stage=status, updated_at=now, error=error)
+                dub.setdefault("artifacts", {}).update(artifacts or {})
 
         runs = list(payload.get("runs") or [])
         if runs:
@@ -170,6 +279,34 @@ class ProjectStore:
             payload["runs"] = runs[-20:]
         _atomic_write(self.manifest_path, payload)
 
+    def delete_dub(self, dub_id: str) -> dict:
+        payload = self.load()
+        dub = next((d for d in payload.get("dubs", []) if d.get("id") == dub_id), None)
+        if not dub:
+            raise FileNotFoundError(f"Dub not found: {dub_id}")
+        if dub_id == "legacy":
+            raise ValueError("Legacy outputs cannot be deleted as an isolated version")
+        if dub.get("status") == "running":
+            raise ValueError("Stop the running job before deleting its dub")
+        # Only remove the isolated output directory of this dub; never delete shared media/cache.
+        version_root = (self.output_dir / "versions" / dub_id).resolve()
+        if version_root.parent != (self.output_dir / "versions").resolve():
+            raise ValueError("Invalid dub ID")
+        if version_root.exists():
+            shutil.rmtree(version_root)
+        payload["dubs"] = [d for d in payload["dubs"] if d.get("id") != dub_id]
+        payload["subtitles"] = {
+            key: value for key, value in payload.get("subtitles", {}).items()
+            if not key.startswith(dub_id + ":")
+        }
+        payload["artifacts"] = {
+            key: value for key, value in payload.get("artifacts", {}).items()
+            if not Path(str(value)).is_relative_to(version_root)
+        }
+        payload["updated_at"] = _now()
+        _atomic_write(self.manifest_path, payload)
+        return payload
+
 
 def list_projects(output_dir: Path) -> list[dict]:
     root = Path(output_dir).expanduser().resolve() / ".anime_dubber_project" / "projects"
@@ -177,7 +314,7 @@ def list_projects(output_dir: Path) -> list[dict]:
     manifest_paths = root.glob("*.json") if root.exists() else []
     for path in manifest_paths:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = _upgrade(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
             continue
         if not isinstance(data, dict):
@@ -194,6 +331,9 @@ def list_projects(output_dir: Path) -> list[dict]:
             "updated_at": str(data.get("updated_at") or ""),
             "created_at": str(data.get("created_at") or ""),
             "artifacts": dict(data.get("artifacts") or {}),
+            "name": str(data.get("name") or ""),
+            "subtitles": dict(data.get("subtitles") or {}),
+            "dubs": list(data.get("dubs") or []),
             "warning_count": len(data.get("warnings") or []),
             "last_error": data.get("last_error"),
             "manifest_path": str(path),
@@ -235,6 +375,12 @@ def list_projects(output_dir: Path) -> list[dict]:
             "updated_at": modified,
             "created_at": modified,
             "artifacts": artifacts,
+            "name": "", "subtitles": {}, "dubs": [{
+                "id": "legacy", "name": "English — Legacy", "language": "en",
+                "source_language": "zh", "status": "completed", "created_at": modified,
+                "updated_at": modified, "config": metadata, "artifacts": artifacts,
+                "warnings": [], "error": None,
+            }] if "dubbed_video" in artifacts else [],
             "warning_count": 0,
             "last_error": None,
             "manifest_path": "",
@@ -246,11 +392,13 @@ def list_projects(output_dir: Path) -> list[dict]:
 
 
 def get_project(output_dir: Path, project_id: str) -> dict:
+    if not project_id or Path(project_id).name != project_id:
+        raise ValueError("Invalid project ID")
     root = Path(output_dir).expanduser().resolve() / ".anime_dubber_project" / "projects"
     path = root / f"{project_id}.json"
     if not path.exists():
         raise FileNotFoundError(f"Project not found: {project_id}")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = _upgrade(json.loads(path.read_text(encoding="utf-8")))
     if not isinstance(data, dict):
         raise ValueError(f"Invalid project manifest: {path}")
     log_path = path.parent.parent / "logs" / f"{project_id}.log"

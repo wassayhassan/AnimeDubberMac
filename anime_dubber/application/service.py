@@ -69,6 +69,9 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         raise ValueError("source is required")
     if not output_dir:
         raise ValueError("output_dir is required")
+    target_language = str(data.get("target_language") or "en").lower()
+    if target_language not in {"en", "es", "fr", "de", "ja"}:
+        raise ValueError("Supported target languages: en, es, fr, de, ja")
 
     asr_provider = str(asr.get("provider") or data.get("asr_provider") or "auto")
 
@@ -92,6 +95,7 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         source=source,
         output_dir=Path(output_dir).expanduser(),
         mode=str(data.get("mode") or "dub"),
+        target_language=target_language,
         asr_provider=asr_provider,
         faster_whisper_model=str(asr.get("model", data.get("faster_whisper_model", "large-v3")) or "large-v3"),
         faster_whisper_device=str(asr.get("device", data.get("faster_whisper_device", "auto")) or "auto"),
@@ -288,14 +292,22 @@ class ApplicationService:
 
     def start_job(self, payload: Dict[str, Any], *, analysis: bool = False) -> str:
         config = config_from_dict(payload)
+        if config.target_language != "en" and config.translation == "whisper":
+            raise ValueError("Whisper direct translation only supports English. Choose LLM or Ollama.")
+        if config.mode == "dub" and config.target_language != "en":
+            if config.tts_engine != "elevenlabs":
+                raise ValueError("Non-English dubbing currently requires ElevenLabs multilingual voices. Choose ElevenLabs or generate subtitles only.")
         job_id = "job_" + uuid.uuid4().hex[:12]
+        dub_id = "dub_" + uuid.uuid4().hex[:12] if not analysis and config.mode == "dub" else ""
+        config.version_id = dub_id or ("sub_" + uuid.uuid4().hex[:12] if not analysis else "")
         record = JobRecord(
             id=job_id,
             kind="analyze" if analysis else "run",
             config=self._normalized_config_dict(config),
         )
         store = ProjectStore(config.output_dir, config.source)
-        store.begin(job_id=job_id, kind=record.kind, config=record.config)
+        store.begin(job_id=job_id, kind=record.kind, config=record.config,
+                    dub_id=dub_id, name=str(payload.get("dub_name") or ""))
         with self._lock:
             self._jobs[job_id] = record
             self._project_stores[job_id] = store
@@ -311,14 +323,22 @@ class ApplicationService:
 
     def run_sync(self, payload: Dict[str, Any], *, analysis: bool = False) -> dict:
         config = config_from_dict(payload)
+        if config.target_language != "en" and config.translation == "whisper":
+            raise ValueError("Whisper direct translation only supports English. Choose LLM or Ollama.")
+        if config.mode == "dub" and config.target_language != "en":
+            if config.tts_engine != "elevenlabs":
+                raise ValueError("Non-English dubbing currently requires ElevenLabs multilingual voices. Choose ElevenLabs or generate subtitles only.")
         job_id = "job_" + uuid.uuid4().hex[:12]
+        dub_id = "dub_" + uuid.uuid4().hex[:12] if not analysis and config.mode == "dub" else ""
+        config.version_id = dub_id or ("sub_" + uuid.uuid4().hex[:12] if not analysis else "")
         record = JobRecord(
             id=job_id,
             kind="analyze" if analysis else "run",
             config=self._normalized_config_dict(config),
         )
         store = ProjectStore(config.output_dir, config.source)
-        store.begin(job_id=job_id, kind=record.kind, config=record.config)
+        store.begin(job_id=job_id, kind=record.kind, config=record.config,
+                    dub_id=dub_id, name=str(payload.get("dub_name") or ""))
         with self._lock:
             self._jobs[job_id] = record
             self._project_stores[job_id] = store
@@ -341,6 +361,10 @@ class ApplicationService:
         store = self._project_stores.get(record.id)
 
         def progress(message: str) -> None:
+            if str(message).lower().startswith("warning"):
+                if store:
+                    store.add_warning(str(message), dub_id=config.version_id)
+                self._emit(AppEvent("warning", {"message": str(message)}, record.id))
             event = progress_to_event(message, record.id)
             if event.event in {"stage", "progress"}:
                 stage = str(event.data.get("stage") or record.stage)
@@ -367,6 +391,13 @@ class ApplicationService:
                 self._emit(AppEvent("log", {"level": "info", "message": str(message)}, record.id))
 
         runner.progress = progress
+        def publish(kind: str, path: Path, language: str = "") -> None:
+            if store:
+                store.publish_artifact(kind, str(path), dub_id=config.version_id, version_id=config.version_id,
+                                       language=language or config.target_language)
+            self._emit(AppEvent("artifact", {"kind": kind, "path": str(path)}, record.id))
+        runner.artifact = publish
+        runner.duration = lambda seconds: store.set_duration(config.version_id, seconds) if store and config.version_id else None
         self._emit(AppEvent("job_started", {"kind": record.kind}, record.id))
 
         try:
@@ -378,7 +409,7 @@ class ApplicationService:
             record.status = "completed"
             record.stage = "completed"
             if store:
-                store.finish(status="completed", artifacts=record.result)
+                store.finish(status="completed", artifacts=record.result, dub_id=config.version_id)
             for kind, path in record.result.items():
                 self._emit(AppEvent("artifact", {"kind": kind, "path": path}, record.id))
             self._emit(AppEvent("finished", {"status": "completed", "result": record.result}, record.id))
@@ -387,14 +418,14 @@ class ApplicationService:
             record.stage = "cancelled"
             record.error = str(exc)
             if store:
-                store.finish(status="cancelled", error=str(exc))
+                store.finish(status="cancelled", error=str(exc), dub_id=config.version_id)
             self._emit(AppEvent("finished", {"status": "cancelled"}, record.id))
         except Exception as exc:
             record.status = "failed"
             record.stage = "failed"
             record.error = str(exc)
             if store:
-                store.finish(status="failed", error=str(exc))
+                store.finish(status="failed", error=str(exc), dub_id=config.version_id)
             self._emit(AppEvent("error", {"message": str(exc), "error_type": type(exc).__name__}, record.id))
             self._emit(AppEvent("finished", {"status": "failed"}, record.id))
         finally:
@@ -428,6 +459,27 @@ class ApplicationService:
         if not str(output_dir or "").strip():
             raise ValueError("output_dir is required")
         return list_project_manifests(Path(output_dir).expanduser())
+
+    def create_project(self, output_dir: str, source: str, name: str = "", series_id: str = "") -> dict:
+        if not output_dir.strip() or not source.strip():
+            raise ValueError("source and output_dir are required")
+        return ProjectStore(Path(output_dir), source).create(source=source, name=name, series_id=series_id)
+
+    def update_project(self, output_dir: str, project_id: str, name: str, series_id: str) -> dict:
+        project = self.get_project(output_dir, project_id)
+        return ProjectStore(Path(output_dir), project["source"]).rename(name, series_id)
+
+    def delete_dub(self, output_dir: str, project_id: str, dub_id: str) -> dict:
+        if not output_dir or not project_id or not dub_id:
+            raise ValueError("output_dir, project_id and dub_id are required")
+        store = ProjectStore(Path(output_dir), "placeholder")
+        if Path(project_id).name != project_id or not project_id:
+            raise ValueError("Invalid project ID")
+        store.project_id = project_id
+        store.manifest_path = store.root / "projects" / f"{project_id}.json"
+        if not store.load():
+            raise FileNotFoundError(project_id)
+        return store.delete_dub(dub_id)
 
     def get_project(self, output_dir: str, project_id: str) -> dict:
         if not str(output_dir or "").strip():

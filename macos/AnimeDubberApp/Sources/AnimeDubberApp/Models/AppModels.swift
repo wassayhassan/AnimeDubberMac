@@ -1,16 +1,28 @@
 import SwiftUI
 
-enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
+enum SidebarDestination: Hashable {
+    case newProject
+    case overview
+    case media
+    case subtitles
+    case dubs
+    case dub(String)
+    case projectSettings
     case newDub
     case projects
     case characters
     case activity
     case settings
 
-    var id: String { rawValue }
-
     var title: String {
         switch self {
+        case .newProject: "New Project"
+        case .overview: "Overview"
+        case .media: "Source / Media"
+        case .subtitles: "Subtitles"
+        case .dubs: "Dubs"
+        case .dub: "Dub Details"
+        case .projectSettings: "Project Settings"
         case .newDub: "New Dub"
         case .projects: "Projects"
         case .characters: "Characters"
@@ -21,6 +33,13 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
 
     var symbol: String {
         switch self {
+        case .newProject: "folder.badge.plus"
+        case .overview: "square.grid.2x2"
+        case .media: "film"
+        case .subtitles: "captions.bubble"
+        case .dubs: "waveform"
+        case .dub: "waveform.circle"
+        case .projectSettings: "slider.horizontal.3"
         case .newDub: "waveform.badge.plus"
         case .projects: "square.stack.3d.up"
         case .characters: "person.2"
@@ -37,7 +56,7 @@ enum OutputMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .dub: "English dub + subtitles"
+        case .dub: "Dub + subtitles"
         case .subtitles: "Subtitles only"
         }
     }
@@ -164,6 +183,7 @@ struct SystemCheckItem: Identifiable {
 struct ProjectSummary: Identifiable {
     let id: String
     let source: String
+    let name: String
     let seriesID: String
     let outputDir: String
     let status: String
@@ -172,6 +192,8 @@ struct ProjectSummary: Identifiable {
     let progress: Double?
     let updatedAt: String
     let artifacts: [String: String]
+    let subtitles: [SubtitleSummary]
+    let dubs: [DubSummary]
     let warningCount: Int
     let lastError: String?
 
@@ -179,6 +201,7 @@ struct ProjectSummary: Identifiable {
         guard let projectID = dictionary["project_id"] as? String, !projectID.isEmpty else { return nil }
         id = projectID
         source = dictionary["source"] as? String ?? ""
+        name = dictionary["name"] as? String ?? ""
         seriesID = dictionary["series_id"] as? String ?? ""
         outputDir = dictionary["output_dir"] as? String ?? ""
         status = dictionary["status"] as? String ?? "unknown"
@@ -191,11 +214,17 @@ struct ProjectSummary: Identifiable {
         }
         updatedAt = dictionary["updated_at"] as? String ?? ""
         artifacts = dictionary["artifacts"] as? [String: String] ?? [:]
+        let subtitleRows = dictionary["subtitles"] as? [String: [String: Any]] ?? [:]
+        subtitles = subtitleRows.map { SubtitleSummary(id: $0.key, dictionary: $0.value) }
+            .sorted { $0.createdAt > $1.createdAt }
+        dubs = (dictionary["dubs"] as? [[String: Any]] ?? []).compactMap(DubSummary.init(dictionary:))
+            .sorted { $0.createdAt > $1.createdAt }
         warningCount = (dictionary["warning_count"] as? NSNumber)?.intValue ?? 0
         lastError = dictionary["last_error"] as? String
     }
 
     var displayName: String {
+        if !name.isEmpty { return name }
         if !seriesID.isEmpty { return seriesID }
         if source.hasPrefix("http") { return id }
         let url = URL(fileURLWithPath: source)
@@ -205,6 +234,57 @@ struct ProjectSummary: Identifiable {
     var statusLabel: String {
         status.replacingOccurrences(of: "_", with: " ").capitalized
     }
+}
+
+struct SubtitleSummary: Identifiable {
+    let id: String
+    let language: String
+    let createdAt: String
+    let artifacts: [String: String]
+
+    init(id: String, dictionary: [String: Any]) {
+        self.id = id
+        language = dictionary["language"] as? String ?? id
+        createdAt = dictionary["created_at"] as? String ?? ""
+        artifacts = dictionary["artifacts"] as? [String: String] ?? [:]
+    }
+}
+
+struct DubSummary: Identifiable {
+    let id: String
+    let name: String
+    let language: String
+    let sourceLanguage: String
+    let status: String
+    let stage: String
+    let createdAt: String
+    let updatedAt: String
+    let config: [String: Any]
+    let artifacts: [String: String]
+    let warnings: [String]
+    let error: String?
+    let sync: String
+    let duration: Double?
+
+    init?(dictionary: [String: Any]) {
+        guard let id = dictionary["id"] as? String else { return nil }
+        self.id = id
+        name = dictionary["name"] as? String ?? id
+        language = dictionary["language"] as? String ?? "en"
+        sourceLanguage = dictionary["source_language"] as? String ?? "zh"
+        status = dictionary["status"] as? String ?? "unknown"
+        stage = dictionary["stage"] as? String ?? ""
+        createdAt = dictionary["created_at"] as? String ?? ""
+        updatedAt = dictionary["updated_at"] as? String ?? ""
+        config = dictionary["config"] as? [String: Any] ?? [:]
+        artifacts = dictionary["artifacts"] as? [String: String] ?? [:]
+        warnings = dictionary["warnings"] as? [String] ?? []
+        error = dictionary["error"] as? String
+        sync = dictionary["sync"] as? String ?? "Timing metadata unavailable"
+        duration = (dictionary["duration"] as? NSNumber)?.doubleValue
+    }
+
+    var title: String { name.isEmpty ? "\(language.uppercased()) dub" : name }
 }
 
 struct CharacterMapSummary: Identifiable, Hashable {

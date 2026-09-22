@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("source", help="YouTube URL or local video path")
         p.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
         p.add_argument("--series-id", default="")
+        p.add_argument("--target-language", choices=["en", "es", "fr", "de", "ja"], default="en")
+        p.add_argument("--dub-name", default="", help="Name of this dub version")
         p.add_argument(
             "--asr",
             choices=["auto", "mlx-whisper", "faster-whisper"],
@@ -68,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--elevenlabs-api-key", default="")
         p.add_argument("--json", action="store_true", help="Print machine-readable final result")
 
-    run = sub.add_parser("run", help="Generate subtitles or an English dub")
+    run = sub.add_parser("run", help="Generate subtitles or a dub version")
     add_job_args(run)
     run.add_argument("--subtitles-only", action="store_true")
 
@@ -78,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     caps = sub.add_parser("capabilities", help="Show detected platform/provider capabilities")
     caps.add_argument("--json", action="store_true")
 
+    projects = sub.add_parser("projects", help="List source projects and their dub versions")
+    projects.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
+    create = sub.add_parser("new-project", help="Register a source video before processing")
+    create.add_argument("source")
+    create.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
+    create.add_argument("--name", default="")
+    create.add_argument("--series-id", default="")
+
     return parser
 
 
@@ -86,6 +96,8 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "source": args.source,
         "output_dir": str(Path(args.output).expanduser()),
         "series_id": args.series_id,
+        "target_language": args.target_language,
+        "dub_name": args.dub_name,
         "mode": "subtitles" if getattr(args, "subtitles_only", False) else "dub",
         "asr": {
             "provider": args.asr,
@@ -176,6 +188,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(caps, indent=2))
         else:
             print(json.dumps(caps, indent=2))
+        return 0
+
+    if args.command == "projects":
+        print(json.dumps(service.list_projects(args.output), indent=2))
+        return 0
+    if args.command == "new-project":
+        print(json.dumps(service.create_project(args.output, args.source, args.name, args.series_id), indent=2))
         return 0
 
     analysis = args.command == "analyze"

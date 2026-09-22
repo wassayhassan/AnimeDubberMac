@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from anime_dubber.characters import CharacterProfile
-from anime_dubber.core import Config, Segment, run_pipeline
+from anime_dubber.core import CommandRunner, Config, Segment, run_pipeline
 
 
 class PipelineOrchestrationTests(unittest.TestCase):
@@ -31,7 +31,11 @@ class PipelineOrchestrationTests(unittest.TestCase):
                 return [p1, p2], payload
 
             seen = []
+            published = []
+            runner = CommandRunner()
+            runner.artifact = lambda kind, path, language: published.append((kind, Path(path).exists()))
             def fake_tts(seg, index, tts_dir, config, runner, progress, profile=None):
+                self.assertIn(("translated_srt", True), published)
                 seen.append((seg.speaker_id, seg.style, (profile or {}).get("macos_voice")))
                 out = d / f"clip{index}.wav"; out.write_bytes(b"clip"); return out
 
@@ -49,7 +53,7 @@ class PipelineOrchestrationTests(unittest.TestCase):
                  patch("anime_dubber.core.build_dialogue_safe_background", return_value=bg), \
                  patch("anime_dubber.core.mix_background_and_dub", return_value=mixed), \
                  patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, f, _r, _p: f.write_bytes(b"final")):
-                results = run_pipeline(cfg, lambda _m: None)
+                results = run_pipeline(cfg, lambda _m: None, runner)
 
             self.assertEqual(seen, [
                 ("CHAR_001", "shouting", "Alex"),
