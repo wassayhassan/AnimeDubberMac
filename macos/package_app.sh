@@ -48,6 +48,7 @@ if [[ "$EMBED_VENV" -eq 1 && ! -x "$ROOT/.venv/bin/python" ]]; then
 fi
 
 VERSION="$("$ROOT/.venv/bin/python" -c 'import anime_dubber; print(anime_dubber.__version__)' 2>/dev/null || echo "4.0.0a5")"
+SHORT_VERSION="${VERSION%%a*}"
 
 echo "Building SwiftUI app (release)…"
 swift build -c release --package-path "$PKG"
@@ -94,7 +95,7 @@ cat > "$CONTENTS/Info.plist" <<EOF
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>$VERSION</string>
+  <string>$SHORT_VERSION</string>
   <key>CFBundleVersion</key>
   <string>405</string>
   <key>LSMinimumSystemVersion</key>
