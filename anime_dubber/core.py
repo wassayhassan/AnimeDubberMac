@@ -649,6 +649,37 @@ def translate_with_ollama_provider(
     return segments
 
 
+def _precise_row_bounds(row: dict) -> Tuple[float, float]:
+    """Prefer first/last word timestamps when Whisper supplies them."""
+    start = float(row.get("start", 0.0) or 0.0)
+    end = float(row.get("end", 0.0) or 0.0)
+    words = row.get("words") or []
+
+    valid = []
+    for word in words:
+        try:
+            if isinstance(word, dict):
+                ws = float(word.get("start", 0.0) or 0.0)
+                we = float(word.get("end", 0.0) or 0.0)
+            else:
+                ws = float(getattr(word, "start", 0.0) or 0.0)
+                we = float(getattr(word, "end", 0.0) or 0.0)
+        except Exception:
+            continue
+        if math.isfinite(ws) and math.isfinite(we) and we > ws:
+            valid.append((ws, we))
+
+    if valid:
+        word_start = valid[0][0]
+        word_end = valid[-1][1]
+        if word_start >= max(0.0, start - 0.75) and word_start <= end + 0.25:
+            start = word_start
+        if word_end >= start and word_end <= end + 0.75:
+            end = word_end
+
+    return start, end
+
+
 def transcribe_audio(
     audio: Path,
     config: Config,
@@ -662,24 +693,30 @@ def transcribe_audio(
 
     provider = resolve_asr_provider(config.asr_provider)
     cache_name = (
-        f"transcript_zh_{provider}_v4.json"
+        f"transcript_zh_{provider}_v5_precise.json"
         if task == "transcribe"
-        else f"transcript_en_{provider}_v4.json"
+        else f"transcript_en_{provider}_v5_precise.json"
     )
     cache = work_dir / cache_name
     legacy_cache = work_dir / (
         "transcript_zh_v3.json" if task == "transcribe" else "transcript_en_whisper_v3.json"
+    )
+    previous_v4 = work_dir / (
+        f"transcript_zh_{provider}_v4.json"
+        if task == "transcribe"
+        else f"transcript_en_{provider}_v4.json"
     )
     cache_to_read = cache
     if (
         config.resume
         and not config.force
         and not cache.exists()
-        and provider == "mlx_whisper"
-        and legacy_cache.exists()
+        and (previous_v4.exists() or legacy_cache.exists())
     ):
-        cache_to_read = legacy_cache
-        progress(f"Reusing legacy MLX transcript cache: {legacy_cache.name}")
+        progress(
+            "Precise lip-sync timing upgrade: rebuilding Whisper timestamps once "
+            "with word-level timing; compatible translation/cache data will still be reused."
+        )
 
     if config.resume and cache_to_read.exists() and not config.force:
         data = json.loads(cache_to_read.read_text(encoding="utf-8"))
@@ -729,7 +766,7 @@ def transcribe_audio(
             language="zh",
             task=task,
             initial_prompt=initial_prompt,
-            word_timestamps=False,
+            word_timestamps=True,
         )
         provider_rows = result.get("segments", [])
     elif provider == "faster_whisper":
@@ -755,11 +792,13 @@ def transcribe_audio(
     else:
         raise PipelineError(f"Unsupported ASR provider: {provider}")
 
-    raw_segs = [
-        Segment(float(x.get("start", 0)), float(x.get("end", 0)), str(x.get("text", "")).strip())
-        for x in provider_rows
-        if str(x.get("text", "")).strip()
-    ]
+    raw_segs = []
+    for x in provider_rows:
+        text = str(x.get("text", "")).strip()
+        if not text:
+            continue
+        precise_start, precise_end = _precise_row_bounds(x)
+        raw_segs.append(Segment(precise_start, precise_end, text))
     segs = sanitize_segments(raw_segs)
     if len(segs) != len(raw_segs) or any(
         abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
@@ -1261,7 +1300,12 @@ def prepare_tts_clip(
         filters += ["acompressor=threshold=0.125:ratio=3:attack=5:release=90"]
     elif style == "whispering":
         filters += ["highpass=f=120", "lowpass=f=6500"]
-    filters += [f"volume={max(0.1, min(3.0, gain)):.4f}", f"aresample={SAMPLE_RATE}", "aformat=sample_fmts=s16:channel_layouts=stereo"]
+    filters += [
+        f"atrim=duration={target_dur:.6f}",
+        f"volume={max(0.1, min(3.0, gain)):.4f}",
+        f"aresample={SAMPLE_RATE}",
+        "aformat=sample_fmts=s16:channel_layouts=stereo",
+    ]
     runner.run([
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(source_audio),
@@ -1282,6 +1326,7 @@ def prepare_tts_clip(
         safe_filters = [
             "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB",
             "afade=t=in:st=0:d=0.012",
+            f"atrim=duration={target_dur:.6f}",
             f"volume={max(0.1, min(3.0, gain)):.4f}",
             f"aresample={SAMPLE_RATE}",
             "aformat=sample_fmts=s16:channel_layouts=stereo",
