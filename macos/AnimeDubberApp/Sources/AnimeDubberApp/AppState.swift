@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppState: ObservableObject {
@@ -97,6 +98,8 @@ final class AppState: ObservableObject {
     func startJob(analysis: Bool) {
         guard canStartJob else { return }
 
+        let threshold: Any = speakerThreshold == 0 ? NSNull() : speakerThreshold
+
         let params: [String: Any] = [
             "source": source,
             "output_dir": outputFolder,
@@ -108,7 +111,7 @@ final class AppState: ObservableObject {
                 "enabled": detectCharacters,
                 "backend": speakerBackend,
                 "max_speakers": maxSpeakers,
-                "threshold": speakerThreshold == 0 ? NSNull() : speakerThreshold,
+                "threshold": threshold,
             ],
             "audio": [
                 "background_volume": backgroundVolume,
