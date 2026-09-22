@@ -73,6 +73,29 @@ def serve() -> int:
                 result = service.get_job(job_id)
             elif method == "list_jobs":
                 result = service.list_jobs()
+            elif method == "list_projects":
+                result = service.list_projects(str(params.get("output_dir") or ""))
+            elif method == "get_project":
+                result = service.get_project(
+                    str(params.get("output_dir") or ""),
+                    str(params.get("project_id") or ""),
+                )
+            elif method == "list_character_maps":
+                result = service.list_character_maps(str(params.get("output_dir") or ""))
+            elif method == "get_characters":
+                result = service.get_characters(str(params.get("path") or ""))
+            elif method == "update_character":
+                result = service.update_character(
+                    str(params.get("path") or ""),
+                    str(params.get("character_id") or ""),
+                    dict(params.get("updates") or {}),
+                )
+            elif method == "preview_voice":
+                result = service.preview_voice(
+                    str(params.get("voice") or ""),
+                    str(params.get("text") or ""),
+                    int(params.get("rate") or 205),
+                )
             elif method == "shutdown":
                 result = {"shutting_down": True}
                 shutting_down = True
