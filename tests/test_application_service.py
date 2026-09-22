@@ -72,7 +72,7 @@ class ApplicationServiceTests(unittest.TestCase):
             })
 
         self.assertEqual(job["status"], "completed")
-        self.assertEqual(job["result"]["dubbed_video"], "/tmp/out.mp4")
+        self.assertEqual(job["result"]["dubbed_video"], str(Path("/tmp/out.mp4")))
         self.assertTrue(any(e.event == "job_started" for e in events))
         self.assertTrue(any(e.event == "artifact" for e in events))
         self.assertTrue(any(e.event == "finished" for e in events))
