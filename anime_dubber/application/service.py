@@ -238,7 +238,10 @@ class ApplicationService:
         return list_macos_voices()
 
     def _normalized_config_dict(self, config: Config) -> dict:
-        return _json_safe(asdict(config))
+        data = _json_safe(asdict(config))
+        if data.get("elevenlabs_api_key"):
+            data["elevenlabs_api_key"] = "<redacted>"
+        return data
 
     def start_job(self, payload: Dict[str, Any], *, analysis: bool = False) -> str:
         config = config_from_dict(payload)
