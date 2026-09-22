@@ -1,0 +1,87 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from anime_dubber.core import (
+    Segment,
+    atempo_chain,
+    coalesce_segments,
+    extract_json_array,
+    parse_translation_response,
+    sanitize_name,
+    sanitize_segments,
+    source_key,
+    srt_timestamp,
+    write_srt,
+)
+
+
+class CoreTests(unittest.TestCase):
+    def test_srt_timestamp(self):
+        self.assertEqual(srt_timestamp(0), "00:00:00,000")
+        self.assertEqual(srt_timestamp(61.234), "00:01:01,234")
+        self.assertEqual(srt_timestamp(3661.999), "01:01:01,999")
+
+    def test_atempo_chain(self):
+        self.assertEqual(atempo_chain(1.0), "atempo=1.000000")
+        self.assertEqual(atempo_chain(4.0), "atempo=2.000000,atempo=2.000000")
+        self.assertEqual(atempo_chain(0.25), "atempo=0.500000,atempo=0.500000")
+
+    def test_source_key_youtube(self):
+        self.assertEqual(source_key("https://youtu.be/WH9x3hYwPj0?x=1"), "WH9x3hYwPj0")
+        self.assertEqual(source_key("https://www.youtube.com/watch?v=abc123"), "abc123")
+
+    def test_sanitize(self):
+        self.assertEqual(sanitize_name("Hello / world!?"), "Hello_world")
+
+    def test_coalesce(self):
+        segs = [Segment(0, 1, "你"), Segment(1.1, 2.0, "好"), Segment(4, 5, "再见")]
+        out = coalesce_segments(segs)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0].text, "你 好")
+        self.assertEqual(out[0].end, 2.0)
+
+
+    def test_sanitize_segments_repairs_and_deduplicates_micro_segments(self):
+        segs = [
+            Segment(10.00, 10.02, "Yes"),
+            Segment(10.02, 10.00, "Yes"),
+            Segment(10.04, 10.06, "Yes"),
+            Segment(11.00, 10.90, "Next"),
+            Segment(12.00, 12.02, "-"),
+        ]
+        out = sanitize_segments(segs)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0].text, "Yes")
+        self.assertGreaterEqual(out[0].end - out[0].start, 0.179)
+        self.assertEqual(out[1].text, "Next")
+        self.assertGreaterEqual(out[1].end - out[1].start, 0.179)
+
+    def test_write_srt_skips_invalid_ranges(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.srt"
+            write_srt([Segment(2, 1, "bad"), Segment(3, 4, "good")], p)
+            txt = p.read_text(encoding="utf-8")
+            self.assertNotIn("bad", txt)
+            self.assertIn("good", txt)
+
+    def test_parse_json_translation(self):
+        raw = '```json\n[{"id":0,"text":"Hello"},{"id":1,"text":"World"}]\n```'
+        self.assertEqual(parse_translation_response(raw, [0, 1]), {0: "Hello", 1: "World"})
+
+    def test_parse_line_translation_fallback(self):
+        raw = "0|Hello\n1:World"
+        self.assertEqual(parse_translation_response(raw, [0, 1]), {0: "Hello", 1: "World"})
+
+    def test_write_srt(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.srt"
+            write_srt([Segment(0, 1.5, "你好", "Hello")], p, translated=True)
+            txt = p.read_text(encoding="utf-8")
+            self.assertIn("00:00:00,000 --> 00:00:01,500", txt)
+            self.assertIn("Hello", txt)
+
+
+if __name__ == "__main__":
+    unittest.main()

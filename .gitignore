@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+
+.DS_Store
+
+.anime_dubber_work/
+.anime_dubber_series/
+
+*.wav
+*.mp3
+*.mp4
+*.mkv
+*.mov
+
+*.log

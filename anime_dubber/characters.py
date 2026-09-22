@@ -1,0 +1,697 @@
+from __future__ import annotations
+
+import json
+import math
+import platform
+import re
+import shutil
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import numpy as np
+
+ANALYSIS_SR = 16000
+
+
+@dataclass
+class AudioFeatures:
+    rms_db: float = -90.0
+    f0_median: float = 0.0
+    voiced_ratio: float = 0.0
+    zcr: float = 0.0
+    flatness: float = 0.0
+    centroid: float = 0.0
+    embedding: List[float] = field(default_factory=list)
+
+
+@dataclass
+class CharacterProfile:
+    id: str
+    display_name: str
+    role: str = "minor"
+    voice_class: str = "neutral"  # male|female|neutral
+    voice_confidence: float = 0.0
+    age_group: str = "adult"  # child|adult|older
+    age_confidence: float = 0.0
+    line_count: int = 0
+    speaking_seconds: float = 0.0
+    speaking_share: float = 0.0
+    f0_median: float = 0.0
+    rms_db_median: float = -90.0
+    roughness: float = 0.0
+    macos_voice: str = ""
+    tts_rate: int = 205
+    pitch_semitones: float = 0.0
+    voice_gain: float = 1.0
+    style_counts: Dict[str, int] = field(default_factory=dict)
+    embedding: List[float] = field(default_factory=list)
+    embedding_backend: str = "acoustic"
+    manual: bool = False
+    notes: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CharacterProfile":
+        allowed = {f.name for f in cls.__dataclass_fields__.values()}
+        payload = {k: v for k, v in d.items() if k in allowed}
+        return cls(**payload)
+
+
+KNOWN_MAC_VOICES = {
+    # Common English voices. macOS availability varies by version and downloaded voices.
+    "Alex": ("male", "adult"),
+    "Daniel": ("male", "adult"),
+    "Aaron": ("male", "adult"),
+    "Evan": ("male", "adult"),
+    "Nathan": ("male", "adult"),
+    "Tom": ("male", "adult"),
+    "Fred": ("male", "older"),
+    "Ralph": ("male", "older"),
+    "Albert": ("male", "older"),
+    "Junior": ("male", "child"),
+    "Samantha": ("female", "adult"),
+    "Ava": ("female", "adult"),
+    "Allison": ("female", "adult"),
+    "Susan": ("female", "adult"),
+    "Zoe": ("female", "adult"),
+    "Victoria": ("female", "older"),
+    "Karen": ("female", "adult"),
+    "Moira": ("female", "adult"),
+    "Tessa": ("female", "adult"),
+    "Fiona": ("female", "adult"),
+}
+
+VOICE_PREFS = {
+    ("male", "adult"): ["Alex", "Daniel", "Aaron", "Evan", "Nathan", "Tom", "Fred"],
+    ("female", "adult"): ["Samantha", "Ava", "Allison", "Susan", "Zoe", "Karen", "Moira", "Tessa", "Fiona", "Victoria"],
+    ("male", "older"): ["Daniel", "Alex", "Fred", "Ralph", "Albert"],
+    ("female", "older"): ["Victoria", "Samantha", "Ava", "Susan"],
+    ("male", "child"): ["Alex", "Evan", "Junior"],
+    ("female", "child"): ["Samantha", "Ava", "Zoe"],
+    ("neutral", "adult"): ["Alex", "Samantha", "Ava", "Daniel"],
+    ("neutral", "older"): ["Fred", "Victoria", "Alex", "Samantha"],
+    ("neutral", "child"): ["Junior", "Samantha", "Alex"],
+}
+
+
+def cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    if len(a) != len(b) or not a:
+        return -1.0
+    av = np.asarray(a, dtype=np.float32)
+    bv = np.asarray(b, dtype=np.float32)
+    an = float(np.linalg.norm(av))
+    bn = float(np.linalg.norm(bv))
+    if an <= 1e-8 or bn <= 1e-8:
+        return -1.0
+    return float(np.dot(av, bv) / (an * bn))
+
+
+def _normalize(v: np.ndarray) -> np.ndarray:
+    n = float(np.linalg.norm(v))
+    return v / n if n > 1e-8 else v
+
+
+def ensure_analysis_wav(vocals: Path, work_dir: Path, runner, resume: bool = True, force: bool = False) -> Path:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    out = work_dir / "speaker_analysis_16k_mono.wav"
+    if resume and out.exists() and out.stat().st_size > 1000 and not force:
+        return out
+    runner.run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(vocals), "-vn", "-ac", "1", "-ar", str(ANALYSIS_SR),
+        "-c:a", "pcm_s16le", str(out),
+    ])
+    return out
+
+
+def _load_segment(sf_handle, start: float, end: float) -> np.ndarray:
+    sr = int(sf_handle.samplerate)
+    start_frame = max(0, int(start * sr))
+    # Cap analysis excerpts so very long narration lines do not dominate runtime/memory.
+    frames = max(1, min(int(max(0.08, end - start) * sr), int(8.0 * sr)))
+    sf_handle.seek(min(start_frame, max(0, len(sf_handle) - 1)))
+    x = sf_handle.read(frames=frames, dtype="float32", always_2d=False)
+    if isinstance(x, np.ndarray) and x.ndim > 1:
+        x = x.mean(axis=1)
+    if len(x) < int(0.08 * sr):
+        x = np.pad(x, (0, int(0.08 * sr) - len(x)))
+    return np.asarray(x, dtype=np.float32)
+
+
+def _frame_signal(x: np.ndarray, frame: int = 640, hop: int = 320, max_frames: int = 48) -> List[np.ndarray]:
+    if len(x) < frame:
+        x = np.pad(x, (0, frame - len(x)))
+    starts = list(range(0, max(1, len(x) - frame + 1), hop))
+    if not starts:
+        starts = [0]
+    if len(starts) > max_frames:
+        idx = np.linspace(0, len(starts) - 1, max_frames).astype(int)
+        starts = [starts[i] for i in idx]
+    win = np.hanning(frame).astype(np.float32)
+    return [(x[s:s + frame] * win) for s in starts if len(x[s:s + frame]) == frame]
+
+
+def _estimate_pitch(frames: Sequence[np.ndarray], sr: int) -> Tuple[float, float]:
+    vals: List[float] = []
+    min_lag = max(1, int(sr / 350.0))
+    max_lag = max(min_lag + 1, int(sr / 65.0))
+    for fr in frames:
+        y = fr - float(np.mean(fr))
+        energy = float(np.dot(y, y))
+        if energy < 1e-6:
+            continue
+        # FFT autocorrelation is faster than np.correlate for long runs.
+        n = 1
+        while n < len(y) * 2:
+            n <<= 1
+        spec = np.fft.rfft(y, n=n)
+        ac = np.fft.irfft(spec * np.conj(spec), n=n)[:len(y)]
+        if ac[0] <= 1e-9:
+            continue
+        hi = min(max_lag, len(ac) - 1)
+        if hi <= min_lag:
+            continue
+        region = ac[min_lag:hi + 1] / ac[0]
+        lag = int(np.argmax(region)) + min_lag
+        strength = float(ac[lag] / ac[0])
+        if strength >= 0.32:
+            vals.append(float(sr / lag))
+    if not frames:
+        return 0.0, 0.0
+    return (float(np.median(vals)) if vals else 0.0, len(vals) / max(1, len(frames)))
+
+
+def _acoustic_features(x: np.ndarray, sr: int = ANALYSIS_SR) -> AudioFeatures:
+    if x.size == 0:
+        return AudioFeatures()
+    x = x.astype(np.float32)
+    x = x - float(np.mean(x))
+    peak = float(np.max(np.abs(x)))
+    if peak > 1.2:
+        x = x / peak
+    rms = float(np.sqrt(np.mean(x * x) + 1e-12))
+    rms_db = 20.0 * math.log10(max(rms, 1e-8))
+    zcr = float(np.mean(np.abs(np.diff(np.signbit(x)).astype(np.float32)))) if len(x) > 2 else 0.0
+    frames = _frame_signal(x)
+    f0, voiced = _estimate_pitch(frames, sr)
+
+    bands = []
+    centroids = []
+    flats = []
+    for fr in frames:
+        mag = np.abs(np.fft.rfft(fr, n=1024)).astype(np.float64) + 1e-10
+        freqs = np.fft.rfftfreq(1024, 1.0 / sr)
+        valid = (freqs >= 80) & (freqs <= min(7600, sr / 2 - 1))
+        m = mag[valid]
+        f = freqs[valid]
+        if not len(m):
+            continue
+        centroids.append(float(np.sum(f * m) / max(np.sum(m), 1e-10)))
+        flats.append(float(np.exp(np.mean(np.log(m))) / max(np.mean(m), 1e-10)))
+        # Content-robust coarse log spectral envelope.
+        edges = np.geomspace(80, min(7600, sr / 2 - 1), 25)
+        row = []
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            mask = (f >= lo) & (f < hi)
+            row.append(float(np.log1p(np.mean(m[mask]) if np.any(mask) else 0.0)))
+        bands.append(row)
+
+    if bands:
+        b = np.asarray(bands, dtype=np.float32)
+        # Per-frame level normalization reduces loudness/content dependence.
+        b = b - b.mean(axis=1, keepdims=True)
+        emb = np.concatenate([b.mean(axis=0), b.std(axis=0)], axis=0)
+    else:
+        emb = np.zeros(48, dtype=np.float32)
+    # Include only a small amount of pitch information in identity embedding.
+    extra = np.asarray([
+        min(f0, 400.0) / 400.0,
+        voiced,
+        min(zcr, 0.5) * 2.0,
+        min(float(np.median(centroids)) if centroids else 0.0, 8000.0) / 8000.0,
+    ], dtype=np.float32)
+    emb = _normalize(np.concatenate([emb, extra]))
+    return AudioFeatures(
+        rms_db=rms_db,
+        f0_median=f0,
+        voiced_ratio=float(voiced),
+        zcr=zcr,
+        flatness=float(np.median(flats)) if flats else 0.0,
+        centroid=float(np.median(centroids)) if centroids else 0.0,
+        embedding=emb.astype(float).tolist(),
+    )
+
+
+class SpeakerEmbedder:
+    def __init__(self, work_dir: Path, progress, mode: str = "auto"):
+        self.backend = "acoustic"
+        self.model = None
+        self.torch = None
+        if mode == "acoustic":
+            progress("Using built-in acoustic speaker clustering.")
+            return
+        try:
+            from speechbrain.inference.speaker import EncoderClassifier
+            import torch
+            progress("Loading ECAPA speaker model for multi-character diarization…")
+            self.model = EncoderClassifier.from_hparams(
+                source="speechbrain/spkrec-ecapa-voxceleb",
+                savedir=str(work_dir / "speechbrain_ecapa"),
+                run_opts={"device": "cpu"},
+            )
+            self.torch = torch
+            self.backend = "speechbrain-ecapa"
+        except Exception as e:
+            progress(f"Speaker model unavailable ({e}); using built-in acoustic clustering fallback.")
+
+    def embed_many(self, waves: Sequence[np.ndarray], acoustics: Sequence[AudioFeatures]) -> List[List[float]]:
+        if self.model is None or self.torch is None:
+            return [a.embedding for a in acoustics]
+        try:
+            min_len = int(0.35 * ANALYSIS_SR)
+            max_len = max(min_len, max(len(x) for x in waves))
+            batch = np.zeros((len(waves), max_len), dtype=np.float32)
+            lens = []
+            for i, x in enumerate(waves):
+                n = min(len(x), max_len); batch[i, :n] = x[:n]; lens.append(max(n, min_len) / max_len)
+            wav = self.torch.tensor(batch, dtype=self.torch.float32)
+            wav_lens = self.torch.tensor(lens, dtype=self.torch.float32)
+            with self.torch.no_grad():
+                e = self.model.encode_batch(wav, wav_lens=wav_lens).detach().cpu().numpy().astype(np.float32)
+            e = e.reshape(len(waves), -1)
+            return [_normalize(row).astype(float).tolist() for row in e]
+        except Exception:
+            return [a.embedding for a in acoustics]
+
+    def embed(self, x: np.ndarray, acoustic: AudioFeatures) -> List[float]:
+        return self.embed_many([x], [acoustic])[0]
+
+
+def _greedy_cluster(embeddings: Sequence[Sequence[float]], max_speakers: int, threshold: float) -> List[int]:
+    centroids: List[np.ndarray] = []
+    counts: List[int] = []
+    labels: List[int] = []
+    for e in embeddings:
+        v = _normalize(np.asarray(e, dtype=np.float32))
+        if not centroids:
+            centroids.append(v); counts.append(1); labels.append(0); continue
+        sims = [float(np.dot(v, c)) for c in centroids]
+        best = int(np.argmax(sims))
+        if sims[best] >= threshold or len(centroids) >= max_speakers:
+            labels.append(best)
+            counts[best] += 1
+            centroids[best] = _normalize(centroids[best] * (counts[best] - 1) + v)
+        else:
+            labels.append(len(centroids)); centroids.append(v); counts.append(1)
+    # Merge obvious duplicate clusters.
+    changed = True
+    while changed and len(centroids) > 1:
+        changed = False
+        best_pair = None; best_sim = threshold + 0.06
+        for i in range(len(centroids)):
+            for j in range(i + 1, len(centroids)):
+                sim = float(np.dot(centroids[i], centroids[j]))
+                if sim > best_sim:
+                    best_sim = sim; best_pair = (i, j)
+        if best_pair:
+            a, b = best_pair
+            for k, lab in enumerate(labels):
+                if lab == b:
+                    labels[k] = a
+                elif lab > b:
+                    labels[k] = lab - 1
+            na, nb = counts[a], counts[b]
+            centroids[a] = _normalize(centroids[a] * na + centroids[b] * nb)
+            counts[a] += counts[b]
+            del centroids[b]; del counts[b]
+            changed = True
+    return labels
+
+
+def _centroid(vectors: Sequence[Sequence[float]]) -> List[float]:
+    if not vectors:
+        return []
+    arr = np.asarray(vectors, dtype=np.float32)
+    return _normalize(arr.mean(axis=0)).astype(float).tolist()
+
+
+def _infer_voice_class(f0: float) -> Tuple[str, float]:
+    # This is acoustic voice presentation, not a claim about a person's identity.
+    if f0 <= 0:
+        return "neutral", 0.2
+    if f0 < 170:
+        return "male", min(0.95, 0.60 + (170 - f0) / 180)
+    if f0 > 190:
+        return "female", min(0.95, 0.60 + (f0 - 190) / 220)
+    return "neutral", 0.4
+
+
+def _infer_age_group(f0: float, flatness: float, global_flatness: float, voice_class: str) -> Tuple[str, float]:
+    if f0 <= 0:
+        return "adult", 0.25
+    # Conservative: only call child/older when the acoustic evidence is fairly strong.
+    if f0 >= 300:
+        return "child", min(0.88, 0.58 + (f0 - 300) / 280)
+    rough_ratio = flatness / max(global_flatness, 0.005)
+    old_cut = 145 if voice_class == "male" else 175
+    if f0 < old_cut and rough_ratio > 1.35:
+        return "older", min(0.82, 0.55 + (rough_ratio - 1.35) / 2.5)
+    return "adult", 0.62
+
+
+def _role_for(rank: int, share: float, n: int) -> str:
+    if rank == 0:
+        return "lead"
+    if share >= 0.16 or (rank == 1 and n <= 5):
+        return "major"
+    if share >= 0.055:
+        return "supporting"
+    return "minor"
+
+
+def _pick_voice(profile: CharacterProfile, available: Sequence[str], used: set) -> Tuple[str, int, float, float]:
+    prefs = VOICE_PREFS.get((profile.voice_class, profile.age_group), VOICE_PREFS[("neutral", "adult")])
+    voice = ""
+    def matches(pref: str):
+        return [a for a in available if a == pref or a.startswith(pref + " ") or a.startswith(pref + "(")]
+    for name in prefs:
+        for candidate in matches(name):
+            if candidate not in used:
+                voice = candidate; break
+        if voice:
+            break
+    if not voice:
+        for name in prefs:
+            found = matches(name)
+            if found:
+                voice = found[0]; break
+    if not voice and available:
+        voice = available[0]
+    if voice:
+        used.add(voice)
+
+    rate = 205
+    pitch = 0.0
+    gain = 1.0
+    if profile.age_group == "child":
+        rate = 225; pitch += 3.2; gain = 0.95
+    elif profile.age_group == "older":
+        rate = 185; pitch -= 1.5; gain = 1.02
+    if profile.voice_class == "female" and voice and KNOWN_MAC_VOICES.get(voice, ("neutral", "adult"))[0] != "female":
+        pitch += 2.0
+    elif profile.voice_class == "male" and voice and KNOWN_MAC_VOICES.get(voice, ("neutral", "adult"))[0] != "male":
+        pitch -= 2.0
+    # Lead voices should be a little more measured and prominent; minor voices can be slightly quicker.
+    if profile.role == "lead":
+        rate -= 5; gain *= 1.05
+    elif profile.role == "minor":
+        rate += 8; gain *= 0.95
+    return voice, max(120, min(320, rate)), pitch, gain
+
+
+def _style_for_segment(feat: AudioFeatures, baseline: dict, text: str) -> Tuple[str, float]:
+    rms_delta = feat.rms_db - baseline["rms"]
+    f0_ratio = feat.f0_median / baseline["f0"] if feat.f0_median > 0 and baseline["f0"] > 0 else 1.0
+    flat_ratio = feat.flatness / max(baseline["flat"], 0.005)
+    shout = max(0.0, (rms_delta - 4.5) / 7.0) + max(0.0, (f0_ratio - 1.10) / 0.30)
+    if "!" in text or "！" in text:
+        shout += 0.35
+    whisper = max(0.0, (-rms_delta - 5.5) / 8.0) + max(0.0, (0.55 - feat.voiced_ratio) / 0.35)
+    if flat_ratio > 1.3:
+        whisper += min(0.6, (flat_ratio - 1.3) / 1.5)
+    if shout >= 0.75 and shout > whisper:
+        return "shouting", min(0.97, 0.58 + shout * 0.22)
+    if whisper >= 0.85 and whisper > shout:
+        return "whispering", min(0.95, 0.55 + whisper * 0.20)
+    return "normal", max(0.55, 0.82 - max(shout, whisper) * 0.12)
+
+
+def _load_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+    except Exception:
+        return default
+
+
+def _apply_manual_overrides(profiles: List[CharacterProfile], override_path: Optional[Path]) -> None:
+    if not override_path or not override_path.exists():
+        return
+    data = _load_json(override_path, {})
+    items = data.get("characters", []) if isinstance(data, dict) else []
+    by_id = {str(x.get("id")): x for x in items if isinstance(x, dict)}
+    editable = {"display_name", "role", "voice_class", "age_group", "macos_voice", "tts_rate", "pitch_semitones", "voice_gain", "notes"}
+    for p in profiles:
+        old = by_id.get(p.id)
+        if not old or not bool(old.get("manual")):
+            continue
+        for k in editable:
+            if k in old:
+                setattr(p, k, old[k])
+        p.manual = True
+
+
+def _series_db_path(output_dir: Path, series_id: str) -> Optional[Path]:
+    if not series_id.strip():
+        return None
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", series_id.strip()).strip("._-") or "series"
+    p = output_dir / ".anime_dubber_series" / f"{safe}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _match_series_profiles(profiles: List[CharacterProfile], db_path: Optional[Path], backend: str, progress) -> None:
+    if not db_path:
+        return
+    data = _load_json(db_path, {"characters": []})
+    old = [CharacterProfile.from_dict(x) for x in data.get("characters", []) if isinstance(x, dict)]
+    next_num = 1
+    for o in old:
+        m = re.search(r"(\d+)$", o.id)
+        if m:
+            next_num = max(next_num, int(m.group(1)) + 1)
+    used_old = set()
+    for p in profiles:
+        best = None; best_sim = 0.0
+        for o in old:
+            if o.id in used_old or o.embedding_backend != backend:
+                continue
+            sim = cosine(p.embedding, o.embedding)
+            if sim > best_sim:
+                best_sim = sim; best = o
+        threshold = 0.73 if backend == "speechbrain-ecapa" else 0.94
+        if best is not None and best_sim >= threshold:
+            used_old.add(best.id)
+            p.id = best.id
+            p.display_name = best.display_name
+            # Persistent voice identity wins; current-run acoustics/role remain descriptive.
+            p.macos_voice = best.macos_voice
+            p.tts_rate = best.tts_rate
+            p.pitch_semitones = best.pitch_semitones
+            p.voice_gain = best.voice_gain
+            if best.manual:
+                p.voice_class = best.voice_class
+                p.age_group = best.age_group
+                p.role = best.role
+                p.manual = True
+            progress(f"Matched {p.id} to an existing series voice ({best_sim:.2f} similarity).")
+        else:
+            p.id = f"CHAR_{next_num:03d}"; p.display_name = f"Character {next_num}"; next_num += 1
+
+
+def save_series_profiles(profiles: Sequence[CharacterProfile], db_path: Optional[Path]) -> None:
+    if not db_path:
+        return
+    existing = _load_json(db_path, {"characters": []})
+    by_id = {str(x.get("id")): x for x in existing.get("characters", []) if isinstance(x, dict)}
+    for p in profiles:
+        old = by_id.get(p.id, {})
+        d = p.to_dict()
+        d["cumulative_lines"] = int(old.get("cumulative_lines", 0)) + p.line_count
+        d["cumulative_seconds"] = float(old.get("cumulative_seconds", 0.0)) + p.speaking_seconds
+        by_id[p.id] = d
+    payload = {"version": 1, "characters": list(by_id.values())}
+    db_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def analyze_characters(
+    vocals: Path,
+    segments: Sequence,
+    work_dir: Path,
+    output_dir: Path,
+    runner,
+    progress,
+    *,
+    resume: bool = True,
+    force: bool = False,
+    max_speakers: int = 12,
+    speaker_threshold: float = 0.0,
+    series_id: str = "",
+    available_voices: Sequence[str] = (),
+    override_path: Optional[Path] = None,
+    speaker_backend: str = "auto",
+) -> Tuple[List[CharacterProfile], dict]:
+    """Assign speaker, acoustic profile, and speaking style to each transcript segment.
+
+    The age/gender-style labels are conservative acoustic categories used only for TTS voice selection.
+    They are not assertions about a real person's identity.
+    """
+    cache = work_dir / "character_analysis.json"
+    signature = {
+        "segments": [[round(float(s.start), 3), round(float(s.end), 3), str(s.text)] for s in segments],
+        "max_speakers": int(max_speakers),
+        "threshold": float(speaker_threshold),
+        "series_id": series_id,
+        "speaker_backend": speaker_backend,
+    }
+    if resume and cache.exists() and not force:
+        old = _load_json(cache, {})
+        if old.get("signature") == signature:
+            profiles = [CharacterProfile.from_dict(x) for x in old.get("characters", [])]
+            labels = old.get("segments", [])
+            if len(labels) == len(segments):
+                for s, lab in zip(segments, labels):
+                    s.speaker_id = lab.get("speaker_id", "")
+                    s.style = lab.get("style", "normal")
+                    s.style_confidence = float(lab.get("style_confidence", 0.0))
+                _apply_manual_overrides(profiles, override_path)
+                return profiles, old
+
+    try:
+        import soundfile as sf
+    except Exception as e:
+        raise RuntimeError("soundfile is required for character analysis. Re-run setup.sh") from e
+
+    analysis_wav = ensure_analysis_wav(vocals, work_dir, runner, resume=resume, force=force)
+    embedder = SpeakerEmbedder(work_dir, progress, mode=speaker_backend)
+    feats: List[AudioFeatures] = []
+    embeds: List[List[float]] = []
+    progress("Analyzing character voices, pitch, age cues, and speaking style…")
+    batch_size = 16 if embedder.backend == "speechbrain-ecapa" else 1
+    with sf.SoundFile(str(analysis_wav), "r") as f:
+        for off in range(0, len(segments), batch_size):
+            runner.check_cancel()
+            batch_segments = segments[off:off + batch_size]
+            waves = []
+            batch_feats = []
+            for seg in batch_segments:
+                x = _load_segment(f, float(seg.start), float(seg.end))
+                waves.append(x)
+                batch_feats.append(_acoustic_features(x, int(f.samplerate)))
+            feats.extend(batch_feats)
+            embeds.extend(embedder.embed_many(waves, batch_feats))
+            done = off + len(batch_segments)
+            if done % 25 < batch_size or done == len(segments):
+                progress(f"Voice analysis: {done}/{len(segments)} lines")
+
+    threshold = float(speaker_threshold)
+    if threshold <= 0:
+        threshold = 0.60 if embedder.backend == "speechbrain-ecapa" else 0.91
+    labels = _greedy_cluster(embeds, max(2, int(max_speakers)), threshold)
+    cluster_ids = sorted(set(labels))
+    total_speech = sum(max(0.01, float(s.end) - float(s.start)) for s in segments)
+    global_flat = float(np.median([x.flatness for x in feats])) if feats else 0.01
+
+    profiles: List[CharacterProfile] = []
+    cluster_to_profile: Dict[int, CharacterProfile] = {}
+    raw_stats = []
+    for c in cluster_ids:
+        idx = [i for i, lab in enumerate(labels) if lab == c]
+        dur = sum(max(0.01, float(segments[i].end) - float(segments[i].start)) for i in idx)
+        f0s = [feats[i].f0_median for i in idx if feats[i].f0_median > 0]
+        f0 = float(np.median(f0s)) if f0s else 0.0
+        rms = float(np.median([feats[i].rms_db for i in idx])) if idx else -90.0
+        flat = float(np.median([feats[i].flatness for i in idx])) if idx else 0.0
+        emb = _centroid([embeds[i] for i in idx])
+        raw_stats.append((c, idx, dur, f0, rms, flat, emb))
+    raw_stats.sort(key=lambda x: x[2], reverse=True)
+
+    used_voices = set()
+    for rank, (c, idx, dur, f0, rms, flat, emb) in enumerate(raw_stats):
+        vc, vc_conf = _infer_voice_class(f0)
+        age, age_conf = _infer_age_group(f0, flat, global_flat, vc)
+        share = dur / max(total_speech, 0.01)
+        p = CharacterProfile(
+            id=f"TMP_{c:03d}", display_name=f"Character {c + 1}",
+            role=_role_for(rank, share, len(raw_stats)),
+            voice_class=vc, voice_confidence=vc_conf,
+            age_group=age, age_confidence=age_conf,
+            line_count=len(idx), speaking_seconds=dur, speaking_share=share,
+            f0_median=f0, rms_db_median=rms, roughness=flat,
+            embedding=emb, embedding_backend=embedder.backend,
+        )
+        profiles.append(p); cluster_to_profile[c] = p
+
+    db_path = _series_db_path(output_dir, series_id)
+    _match_series_profiles(profiles, db_path, embedder.backend, progress)
+
+    # Assign voices to new characters. Existing series matches keep their previous choice.
+    available_set = set(available_voices)
+    for p in profiles:
+        if p.macos_voice and p.macos_voice not in available_set:
+            progress(f"Saved voice '{p.macos_voice}' is not installed; choosing a replacement for {p.id}.")
+            p.macos_voice = ""
+        if p.macos_voice:
+            used_voices.add(p.macos_voice)
+    for p in profiles:
+        if not p.macos_voice:
+            p.macos_voice, p.tts_rate, p.pitch_semitones, p.voice_gain = _pick_voice(p, available_voices, used_voices)
+
+    # cluster_to_profile references still point to the same objects whose ids may have changed.
+    baselines = {}
+    for c in cluster_ids:
+        idx = [i for i, lab in enumerate(labels) if lab == c]
+        f0s = [feats[i].f0_median for i in idx if feats[i].f0_median > 0]
+        baselines[c] = {
+            "rms": float(np.median([feats[i].rms_db for i in idx])) if idx else -30.0,
+            "f0": float(np.median(f0s)) if f0s else 0.0,
+            "flat": float(np.median([feats[i].flatness for i in idx])) if idx else 0.01,
+        }
+
+    segment_rows = []
+    for i, (seg, c) in enumerate(zip(segments, labels)):
+        style, conf = _style_for_segment(feats[i], baselines[c], str(seg.text))
+        prof = cluster_to_profile[c]
+        seg.speaker_id = prof.id
+        seg.style = style
+        seg.style_confidence = conf
+        prof.style_counts[style] = prof.style_counts.get(style, 0) + 1
+        segment_rows.append({
+            "index": i,
+            "speaker_id": prof.id,
+            "style": style,
+            "style_confidence": conf,
+            "rms_db": feats[i].rms_db,
+            "f0_median": feats[i].f0_median,
+            "voiced_ratio": feats[i].voiced_ratio,
+        })
+
+    _apply_manual_overrides(profiles, override_path)
+    save_series_profiles(profiles, db_path)
+    payload = {
+        "version": 3,
+        "signature": signature,
+        "speaker_backend": embedder.backend,
+        "speaker_threshold": threshold,
+        "series_id": series_id,
+        "characters": [p.to_dict() for p in profiles],
+        "segments": segment_rows,
+        "notes": {
+            "voice_class": "Acoustic voice-presentation estimate for TTS selection; not identity inference.",
+            "age_group": "Conservative acoustic estimate. Child/older labels are only assigned when evidence is stronger; manual review is available.",
+            "role": "Lead/major/supporting/minor is inferred from speaking share, not plot knowledge.",
+        },
+    }
+    cache.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return profiles, payload
+
+
+def write_character_map(payload: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_character_map(path: Path) -> dict:
+    return _load_json(path, {})
