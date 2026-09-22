@@ -53,7 +53,7 @@ cd /path/to/AnimeDubberMac
 /bin/zsh setup.sh
 ```
 
-Setup installs the Python dependencies, runs the tests and backend checks, then builds and installs:
+Setup installs the Python dependencies, runs the tests and backend checks, then updates an existing app in `/Applications` or `~/Applications`. If neither exists, it installs:
 
 ```text
 ~/Applications/AnimeDubber.app
@@ -72,6 +72,14 @@ To build, install, and immediately open it:
 ```bash
 /bin/zsh macos/package_app.sh --install --open
 ```
+
+If both locations contain an app, the installer asks for an explicit destination instead of guessing. To replace an app elsewhere, pass its full path, for example:
+
+```bash
+zsh macos/package_app.sh --install-to "/Applications/AnimeDubber.app" --open
+```
+
+Run `zsh macos/package_app.sh --install --print-install-target` to see the location the installer would update. Quit the running app before rebuilding it.
 
 ### Why the macOS app is large
 

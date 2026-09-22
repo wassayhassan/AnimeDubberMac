@@ -90,7 +90,7 @@ if command -v swift >/dev/null 2>&1; then
   echo "Building and installing the native macOS app…"
   /bin/zsh macos/package_app.sh --install
   echo
-  echo "Native app installed at: $HOME/Applications/AnimeDubber.app"
+  echo "Native app installed at the location reported above."
 else
   echo "WARNING: Swift was not found, so the native .app was not built."
   echo "Install Xcode Command Line Tools with: xcode-select --install"
