@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,11 @@ from anime_dubber.cli import build_parser
 from anime_dubber.core import CommandRunner, Config, transcribe_audio
 from anime_dubber.providers.asr import resolve_asr_provider
 from anime_dubber.providers.translation import ollama_generate
-from anime_dubber.providers.tts import automatic_kokoro_voice, synthesize_piper
+from anime_dubber.providers.tts import (
+    _prepare_chatterbox_watermarker,
+    automatic_kokoro_voice,
+    synthesize_piper,
+)
 
 
 class CrossPlatformProviderTests(unittest.TestCase):
@@ -63,6 +68,37 @@ class CrossPlatformProviderTests(unittest.TestCase):
         self.assertEqual(cfg.chatterbox_device, "mps")
         self.assertTrue(cfg.chatterbox_turbo)
         self.assertEqual(cfg.kokoro_voice, "af_bella")
+
+    def test_chatterbox_perth_none_falls_back_to_dummy_watermarker(self):
+        class DummyWatermarker:
+            pass
+
+        fake_perth = types.SimpleNamespace(
+            PerthImplicitWatermarker=None,
+            DummyWatermarker=DummyWatermarker,
+        )
+        with patch.dict("sys.modules", {"perth": fake_perth}):
+            mode = _prepare_chatterbox_watermarker()
+
+        self.assertEqual(mode, "dummy")
+        self.assertIs(fake_perth.PerthImplicitWatermarker, DummyWatermarker)
+
+    def test_chatterbox_keeps_real_perth_watermarker_when_available(self):
+        class RealWatermarker:
+            pass
+
+        class DummyWatermarker:
+            pass
+
+        fake_perth = types.SimpleNamespace(
+            PerthImplicitWatermarker=RealWatermarker,
+            DummyWatermarker=DummyWatermarker,
+        )
+        with patch.dict("sys.modules", {"perth": fake_perth}):
+            mode = _prepare_chatterbox_watermarker()
+
+        self.assertEqual(mode, "implicit")
+        self.assertIs(fake_perth.PerthImplicitWatermarker, RealWatermarker)
 
     def test_automatic_kokoro_character_voice(self):
         self.assertEqual(

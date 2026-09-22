@@ -155,6 +155,32 @@ def _best_torch_device(requested: str = "auto") -> str:
     return "cpu"
 
 
+def _prepare_chatterbox_watermarker() -> str:
+    """Work around a known Perth packaging failure seen on Apple Silicon.
+
+    Some resemble-perth installs expose PerthImplicitWatermarker as None when
+    its optional neural-watermarker import fails. Chatterbox constructs that
+    symbol unconditionally, which otherwise crashes model initialization with
+    "'NoneType' object is not callable". When that happens, use Perth's own
+    DummyWatermarker so speech generation can continue instead of failing.
+    """
+    try:
+        import perth
+    except Exception:
+        return "unavailable"
+
+    implicit = getattr(perth, "PerthImplicitWatermarker", None)
+    if callable(implicit):
+        return "implicit"
+
+    dummy = getattr(perth, "DummyWatermarker", None)
+    if callable(dummy):
+        perth.PerthImplicitWatermarker = dummy
+        return "dummy"
+
+    return "missing"
+
+
 def _load_chatterbox(device: str, turbo: bool):
     key = (device, turbo)
     with _MODEL_LOCK:
@@ -162,20 +188,44 @@ def _load_chatterbox(device: str, turbo: bool):
         if model is not None:
             return model
 
-        try:
+        # Chatterbox currently assumes PerthImplicitWatermarker is callable.
+        # On some macOS/Apple-Silicon installations resemble-perth exports that
+        # symbol as None. Patch it to Perth's documented dummy implementation
+        # before importing/constructing Chatterbox.
+        watermarker_mode = _prepare_chatterbox_watermarker()
+
+        def construct(target_device: str):
             if turbo:
                 from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-                model = ChatterboxTurboTTS.from_pretrained(device=device)
-            else:
-                from chatterbox.tts import ChatterboxTTS
+                return ChatterboxTurboTTS.from_pretrained(device=target_device)
+            from chatterbox.tts import ChatterboxTTS
 
-                model = ChatterboxTTS.from_pretrained(device=device)
+            return ChatterboxTTS.from_pretrained(device=target_device)
+
+        try:
+            model = construct(device)
         except Exception as exc:
-            kind = "Turbo" if turbo else "standard"
-            raise RuntimeError(
-                f"Could not load Chatterbox {kind} on {device}: {exc}"
-            ) from exc
+            # MPS support in the upstream stack is still less complete than
+            # CUDA/CPU. If model initialization itself fails on MPS, retry on
+            # CPU rather than killing a long dubbing job.
+            if device == "mps":
+                try:
+                    model = construct("cpu")
+                    _CHATTERBOX_MODELS[("cpu", turbo)] = model
+                except Exception as cpu_exc:
+                    kind = "Turbo" if turbo else "standard"
+                    raise RuntimeError(
+                        f"Could not load Chatterbox {kind} on mps ({exc}); "
+                        f"CPU fallback also failed ({cpu_exc}). "
+                        f"Perth watermarker mode: {watermarker_mode}"
+                    ) from cpu_exc
+            else:
+                kind = "Turbo" if turbo else "standard"
+                raise RuntimeError(
+                    f"Could not load Chatterbox {kind} on {device}: {exc}. "
+                    f"Perth watermarker mode: {watermarker_mode}"
+                ) from exc
 
         _CHATTERBOX_MODELS[key] = model
         return model
