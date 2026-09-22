@@ -101,6 +101,20 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         ollama_model=str(translation.get("model", data.get("ollama_model", "qwen3:4b")) or "qwen3:4b"),
         tts_engine=tts_provider,
         voice=str(tts.get("fallback_voice", data.get("voice", "")) or ""),
+        chatterbox_reference_audio=str(
+            tts.get("chatterbox_reference_audio", data.get("chatterbox_reference_audio", "")) or ""
+        ),
+        chatterbox_expressiveness=float(
+            tts.get("chatterbox_expressiveness", data.get("chatterbox_expressiveness", 0.5))
+        ),
+        chatterbox_device=str(
+            tts.get("chatterbox_device", data.get("chatterbox_device", "auto")) or "auto"
+        ),
+        chatterbox_turbo=bool(
+            tts.get("chatterbox_turbo", data.get("chatterbox_turbo", True))
+        ),
+        kokoro_voice=str(tts.get("kokoro_voice", data.get("kokoro_voice", "auto")) or "auto"),
+        kokoro_language=str(tts.get("kokoro_language", data.get("kokoro_language", "a")) or "a"),
         piper_model=str(tts.get("piper_model", data.get("piper_model", "")) or ""),
         piper_speaker=int(tts.get("piper_speaker", data.get("piper_speaker", -1))),
         tts_rate=int(tts.get("rate", data.get("tts_rate", 210))),
@@ -143,6 +157,8 @@ class ApplicationService:
         mlx_lm_ok = system == "Darwin" and machine == "arm64" and _module_available("mlx_lm")
         faster_ok = _module_available("faster_whisper")
         piper_ok = bool(shutil.which("piper")) or _module_available("piper")
+        chatterbox_ok = _module_available("chatterbox") and _module_available("torchaudio")
+        kokoro_ok = _module_available("kokoro") and _module_available("soundfile")
         ollama_ok = bool(shutil.which("ollama"))
 
         return {
@@ -158,6 +174,8 @@ class ApplicationService:
                     "ollama": ollama_ok,
                 },
                 "tts": {
+                    "chatterbox": chatterbox_ok,
+                    "kokoro": kokoro_ok,
                     "macos": system == "Darwin" and bool(shutil.which("say")),
                     "piper": piper_ok,
                     "elevenlabs": True,
@@ -172,9 +190,10 @@ class ApplicationService:
                     _module_available("demucs") and (mlx_ok or faster_ok)
                 ),
                 "note": (
-                    "Apple silicon can use MLX Whisper/MLX LLM/macOS voices. "
+                    "Premium local voices prefer Chatterbox Turbo, then Kokoro when installed. "
+                    "Apple silicon can also use MLX Whisper/MLX LLM/macOS voices; "
                     "Windows and Linux can use Faster-Whisper, Whisper-direct or Ollama translation, "
-                    "and Piper or ElevenLabs TTS."
+                    "plus Chatterbox/Kokoro/Piper or ElevenLabs TTS."
                 ),
             },
         }
@@ -205,6 +224,18 @@ class ApplicationService:
                 "detail": "available" if caps["providers"]["asr"]["mlx_whisper"] else "not installed",
             })
             checks.append({
+                "name": "Chatterbox Turbo",
+                "ok": bool(caps["providers"]["tts"]["chatterbox"]),
+                "detail": "available" if caps["providers"]["tts"]["chatterbox"] else "optional; run macos/install_voice_engines.sh",
+                "optional": True,
+            })
+            checks.append({
+                "name": "Kokoro",
+                "ok": bool(caps["providers"]["tts"]["kokoro"]),
+                "detail": "available" if caps["providers"]["tts"]["kokoro"] else "optional; run macos/install_voice_engines.sh",
+                "optional": True,
+            })
+            checks.append({
                 "name": "macOS voices",
                 "ok": bool(caps["providers"]["tts"]["macos"]),
                 "detail": "available" if caps["providers"]["tts"]["macos"] else "say not found",
@@ -214,6 +245,18 @@ class ApplicationService:
                 "name": "faster-whisper",
                 "ok": bool(caps["providers"]["asr"]["faster_whisper"]),
                 "detail": "available" if caps["providers"]["asr"]["faster_whisper"] else "install requirements-cross-platform.txt",
+            })
+            checks.append({
+                "name": "Chatterbox Turbo",
+                "ok": bool(caps["providers"]["tts"]["chatterbox"]),
+                "detail": "available" if caps["providers"]["tts"]["chatterbox"] else "optional premium local TTS",
+                "optional": True,
+            })
+            checks.append({
+                "name": "Kokoro",
+                "ok": bool(caps["providers"]["tts"]["kokoro"]),
+                "detail": "available" if caps["providers"]["tts"]["kokoro"] else "optional fast local TTS",
+                "optional": True,
             })
             checks.append({
                 "name": "Piper",
@@ -415,14 +458,89 @@ class ApplicationService:
         self._emit(AppEvent("character_updated", {"path": str(path), "character": saved}))
         return saved
 
-    def preview_voice(self, voice: str, text: str, rate: int = 205) -> dict:
-        if platform.system() != "Darwin" or not shutil.which("say"):
-            raise RuntimeError("Voice preview currently requires macOS 'say'.")
-        clean_text = str(text or "").strip() or "This is the selected character speaking in English."
-        cmd = ["say", "-r", str(max(80, min(450, int(rate))))]
-        clean_voice = str(voice or "").strip()
-        if clean_voice:
-            cmd += ["-v", clean_voice]
-        cmd.append(clean_text)
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {"started": True}
+    def preview_voice(self, settings: Dict[str, Any]) -> dict:
+        import tempfile
+
+        settings = dict(settings or {})
+        provider = str(settings.get("provider") or "macos").strip().lower()
+        clean_text = str(settings.get("text") or "").strip() or "This is the selected character speaking in English."
+        rate = max(80, min(450, int(settings.get("rate") or 205)))
+
+        if provider in {"", "inherit", "auto"}:
+            from ..providers.tts import chatterbox_available, kokoro_available
+            if chatterbox_available():
+                provider = "chatterbox"
+            elif kokoro_available():
+                provider = "kokoro"
+            elif platform.system() == "Darwin" and shutil.which("say"):
+                provider = "macos"
+            else:
+                provider = "piper"
+
+        if provider == "macos":
+            if platform.system() != "Darwin" or not shutil.which("say"):
+                raise RuntimeError("macOS voice preview requires the 'say' command.")
+            cmd = ["say", "-r", str(rate)]
+            clean_voice = str(settings.get("voice") or "").strip()
+            if clean_voice:
+                cmd += ["-v", clean_voice]
+            cmd.append(clean_text)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return {"started": True, "provider": provider}
+
+        suffix = ".mp3" if provider == "elevenlabs" else ".wav"
+        preview_path = Path(tempfile.gettempdir()) / f"animedubber_preview_{uuid.uuid4().hex}{suffix}"
+        runner = CommandRunner()
+
+        if provider == "chatterbox":
+            from ..providers.tts import synthesize_chatterbox
+            synthesize_chatterbox(
+                clean_text,
+                preview_path,
+                reference_audio=str(settings.get("reference_audio") or ""),
+                expressiveness=float(settings.get("expressiveness") or 0.5),
+                device=str(settings.get("device") or "auto"),
+                turbo=bool(settings.get("turbo", True)),
+                cancel_check=runner.check_cancel,
+            )
+        elif provider == "kokoro":
+            from ..providers.tts import synthesize_kokoro
+            synthesize_kokoro(
+                clean_text,
+                preview_path,
+                voice=str(settings.get("kokoro_voice") or "af_heart"),
+                rate=rate,
+                lang_code=str(settings.get("kokoro_language") or "a"),
+                cancel_check=runner.check_cancel,
+            )
+        elif provider == "piper":
+            from ..providers.tts import synthesize_piper
+            synthesize_piper(
+                clean_text,
+                preview_path,
+                model_path=str(settings.get("piper_model") or ""),
+                rate=rate,
+                speaker=(
+                    int(settings.get("piper_speaker"))
+                    if settings.get("piper_speaker") is not None and int(settings.get("piper_speaker")) >= 0
+                    else None
+                ),
+                cancel_check=runner.check_cancel,
+            )
+        elif provider == "elevenlabs":
+            cfg = Config(
+                source="preview",
+                output_dir=preview_path.parent,
+                tts_engine="elevenlabs",
+                elevenlabs_api_key=str(settings.get("api_key") or ""),
+                elevenlabs_voice_id=str(settings.get("voice_id") or "JBFqnCBsd6RMkjVDRZzb"),
+                elevenlabs_model_id=str(settings.get("model_id") or "eleven_v3"),
+            )
+            from ..core import synthesize_elevenlabs
+            synthesize_elevenlabs(clean_text, preview_path, cfg, runner)
+        else:
+            raise RuntimeError(f"Unsupported preview provider: {provider}")
+
+        if platform.system() == "Darwin" and shutil.which("afplay"):
+            subprocess.Popen(["afplay", str(preview_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"started": True, "provider": provider, "path": str(preview_path)}
