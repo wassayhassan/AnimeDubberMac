@@ -49,7 +49,7 @@ echo
 if command -v swift >/dev/null 2>&1; then
   echo "Rebuilding the native app so its bundled backend includes the new voice engines…"
   /bin/zsh macos/package_app.sh --install
-  echo "Updated app: $HOME/Applications/AnimeDubber.app"
+  echo "Updated the app at the location reported above."
 else
   echo "Swift is not available. Rebuild the app later with:"
   echo "  /bin/zsh macos/package_app.sh --install"

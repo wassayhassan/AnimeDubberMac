@@ -12,6 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check installation target selection
+        run: |
+          zsh -n macos/package_app.sh
+          target="$(zsh macos/package_app.sh --install-to "$RUNNER_TEMP/AnimeDubber Test.app" --print-install-target | tail -1)"
+          test "$target" = "$RUNNER_TEMP/AnimeDubber Test.app"
+
       - name: Build unsigned lightweight app bundle
         run: zsh macos/package_app.sh --no-embed-venv --no-sign
 

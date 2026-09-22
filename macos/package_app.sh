@@ -13,13 +13,25 @@ BACKEND="$RESOURCES/backend"
 
 EMBED_VENV=1
 INSTALL=0
+INSTALL_TO=""
+PRINT_TARGET=0
 OPEN_APP=0
 SIGN=1
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-embed-venv) EMBED_VENV=0 ;;
     --install) INSTALL=1 ;;
+    --print-install-target) PRINT_TARGET=1 ;;
+    --install-to)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --install-to needs the full path to AnimeDubber.app" >&2
+        exit 2
+      fi
+      INSTALL=1
+      INSTALL_TO="$2"
+      shift
+      ;;
     --open) OPEN_APP=1 ;;
     --no-sign) SIGN=0 ;;
     --help)
@@ -28,14 +40,49 @@ Usage: ./macos/package_app.sh [options]
 
 Options:
   --no-embed-venv  Build a lightweight app bundle for CI/development.
-  --install        Copy the finished app to ~/Applications/AnimeDubber.app.
+  --install        Update the existing app in /Applications or ~/Applications.
+                   Install to ~/Applications if no copy exists in either location.
+  --install-to PATH  Update a specific .app (use this if several copies exist).
+  --print-install-target  Show the selected destination without building.
   --open           Open the app after packaging/installing.
   --no-sign        Skip local ad-hoc code signing.
 EOF
       exit 0
       ;;
+    *) echo "ERROR: Unknown option: $1" >&2; exit 2 ;;
   esac
+  shift
 done
+
+TARGET="$APP"
+if [[ "$INSTALL" -eq 1 ]]; then
+  if [[ -n "$INSTALL_TO" ]]; then
+    if [[ "$INSTALL_TO" != /* || "$INSTALL_TO" != *.app ]]; then
+      echo "ERROR: --install-to must be an absolute path ending in .app" >&2
+      exit 2
+    fi
+    TARGET="$INSTALL_TO"
+  else
+    EXISTING=()
+    for CANDIDATE in "/Applications/AnimeDubber.app" "$HOME/Applications/AnimeDubber.app"; do
+      if [[ -d "$CANDIDATE" ]]; then EXISTING+=("$CANDIDATE"); fi
+    done
+    if [[ ${#EXISTING[@]} -gt 1 ]]; then
+      echo "ERROR: Multiple AnimeDubber apps found. Choose the original with --install-to PATH:" >&2
+      printf '  %s\n' "${EXISTING[@]}" >&2
+      exit 2
+    elif [[ ${#EXISTING[@]} -eq 1 ]]; then
+      TARGET="${EXISTING[1]}"
+    else
+      TARGET="$HOME/Applications/AnimeDubber.app"
+    fi
+  fi
+  echo "App installation target: $TARGET"
+fi
+if [[ "$PRINT_TARGET" -eq 1 ]]; then
+  echo "$TARGET"
+  exit 0
+fi
 
 if ! command -v swift >/dev/null 2>&1; then
   echo "ERROR: Swift is required. Install Xcode Command Line Tools with: xcode-select --install"
@@ -127,13 +174,24 @@ if [[ "$SIGN" -eq 1 ]]; then
   codesign --force --deep --sign - "$APP"
 fi
 
-TARGET="$APP"
 if [[ "$INSTALL" -eq 1 ]]; then
-  mkdir -p "$HOME/Applications"
-  TARGET="$HOME/Applications/AnimeDubber.app"
-  rm -rf "$TARGET"
-  ditto "$APP" "$TARGET"
-  echo "Installed: $TARGET"
+  if pgrep -x AnimeDubber >/dev/null 2>&1; then
+    echo "ERROR: Quit AnimeDubber before replacing the installed app." >&2
+    exit 1
+  fi
+  mkdir -p "${TARGET:h}"
+  STAGED="${TARGET}.installing.$$"
+  BACKUP="${TARGET}.previous.$$"
+  ditto "$APP" "$STAGED"
+  if [[ -e "$TARGET" ]]; then mv "$TARGET" "$BACKUP"; fi
+  if mv "$STAGED" "$TARGET"; then
+    if [[ -e "$BACKUP" ]]; then rm -rf "$BACKUP"; fi
+    echo "Updated: $TARGET"
+  else
+    if [[ -e "$BACKUP" ]]; then mv "$BACKUP" "$TARGET"; fi
+    echo "ERROR: Could not install AnimeDubber at $TARGET" >&2
+    exit 1
+  fi
 else
   echo "Built: $APP"
 fi
