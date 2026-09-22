@@ -24,9 +24,32 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("source", help="YouTube URL or local video path")
         p.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
         p.add_argument("--series-id", default="")
-        p.add_argument("--translation", choices=["llm", "whisper"], default="llm")
-        p.add_argument("--tts", choices=["macos", "elevenlabs"], default="macos")
+        p.add_argument(
+            "--asr",
+            choices=["auto", "mlx-whisper", "faster-whisper"],
+            default="auto",
+            help="Speech recognition backend. auto uses MLX on Apple silicon, Faster-Whisper elsewhere.",
+        )
+        p.add_argument("--faster-whisper-model", default="large-v3")
+        p.add_argument("--faster-whisper-device", default="auto", help="auto, cpu, or cuda")
+        p.add_argument("--faster-whisper-compute-type", default="auto")
+        p.add_argument(
+            "--translation",
+            choices=["auto", "llm", "ollama", "whisper"],
+            default="auto",
+            help="auto uses MLX LLM when available, otherwise Whisper direct translation.",
+        )
+        p.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+        p.add_argument("--ollama-model", default="qwen3:4b")
+        p.add_argument(
+            "--tts",
+            choices=["auto", "macos", "piper", "elevenlabs"],
+            default="auto",
+            help="auto uses macOS voices on macOS, Piper when a model is configured, otherwise ElevenLabs.",
+        )
         p.add_argument("--voice", default="")
+        p.add_argument("--piper-model", default="", help="Path to a Piper .onnx voice model")
+        p.add_argument("--piper-speaker", type=int, default=-1, help="Optional Piper speaker id for multi-speaker models")
         p.add_argument("--rate", type=int, default=210)
         p.add_argument("--speaker-backend", choices=["auto", "ecapa", "acoustic"], default="auto")
         p.add_argument("--max-speakers", type=int, default=12)
@@ -59,10 +82,25 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "output_dir": str(Path(args.output).expanduser()),
         "series_id": args.series_id,
         "mode": "subtitles" if getattr(args, "subtitles_only", False) else "dub",
-        "translation": args.translation,
-        "tts_engine": args.tts,
-        "voice": args.voice,
-        "tts_rate": args.rate,
+        "asr": {
+            "provider": args.asr,
+            "model": args.faster_whisper_model,
+            "device": args.faster_whisper_device,
+            "compute_type": args.faster_whisper_compute_type,
+        },
+        "translation": {
+            "provider": args.translation,
+            "ollama_url": args.ollama_url,
+            "model": args.ollama_model,
+        },
+        "tts": {
+            "provider": args.tts,
+            "fallback_voice": args.voice,
+            "piper_model": args.piper_model,
+            "piper_speaker": args.piper_speaker,
+            "rate": args.rate,
+            "api_key": args.elevenlabs_api_key,
+        },
         "speaker_backend": args.speaker_backend,
         "max_speakers": args.max_speakers,
         "speaker_threshold": args.speaker_threshold,
@@ -73,6 +111,8 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "background_volume": args.background_volume,
         "dub_volume": args.dub_volume,
         "elevenlabs_api_key": args.elevenlabs_api_key,
+        "piper_model": args.piper_model,
+        "piper_speaker": args.piper_speaker,
     }
 
 
