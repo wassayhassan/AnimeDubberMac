@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from anime_dubber.core import (
@@ -13,6 +14,7 @@ from anime_dubber.core import (
     mix_background_and_dub,
     build_dialogue_safe_background,
     render_dub_timeline,
+    prepare_tts_clip,
     synthesize_macos,
     _pitch_filters,
     _ffconcat_quote,
@@ -89,6 +91,28 @@ class FfmpegPipelineTests(unittest.TestCase):
             timeline = render_dub_timeline(segs, [clip], 1.0, d, cfg, runner, lambda _m: None)
             self.assertTrue(timeline.exists())
             self.assertGreaterEqual(ffprobe_duration(timeline, runner), 0.99)
+
+    def test_tts_clip_cannot_overrun_source_dialogue_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            long_source = d / "long.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2.0",
+                "-ac", "1", "-ar", "44100", str(long_source),
+            ], check=True)
+
+            def fake_say(_text, out_aiff, _config, _runner, voice="", rate=205):
+                shutil.copyfile(long_source, out_aiff)
+
+            cfg = Config(source="x", output_dir=d, tts_engine="macos", force=True)
+            seg = Segment(5.0, 5.40, "你好", "Hello")
+            runner = CommandRunner()
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say):
+                clip = prepare_tts_clip(seg, 0, d / "tts", cfg, runner, lambda _m: None)
+
+            duration = ffprobe_duration(clip, runner)
+            self.assertLessEqual(duration, 0.43)
 
     def test_pitch_and_style_filter_chain_is_valid(self):
         with tempfile.TemporaryDirectory() as td:
