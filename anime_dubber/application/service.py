@@ -4,6 +4,7 @@ import importlib.util
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import threading
 import uuid
@@ -23,6 +24,7 @@ from ..core import (
 )
 from .events import AppEvent, progress_to_event
 from .jobs import JobRecord
+from .project import ProjectStore, get_project as load_project, list_projects as list_project_manifests
 
 
 EventSink = Callable[[AppEvent], None]
@@ -117,6 +119,8 @@ class ApplicationService:
     def __init__(self, event_sink: Optional[EventSink] = None):
         self._event_sink = event_sink or (lambda _event: None)
         self._jobs: Dict[str, JobRecord] = {}
+        self._project_stores: Dict[str, ProjectStore] = {}
+        self._project_progress_buckets: Dict[str, int] = {}
         self._lock = threading.RLock()
 
     def _emit(self, event: AppEvent) -> None:
@@ -218,8 +222,11 @@ class ApplicationService:
             kind="analyze" if analysis else "run",
             config=self._normalized_config_dict(config),
         )
+        store = ProjectStore(config.output_dir, config.source)
+        store.begin(job_id=job_id, kind=record.kind, config=record.config)
         with self._lock:
             self._jobs[job_id] = record
+            self._project_stores[job_id] = store
 
         thread = threading.Thread(
             target=self._execute,
@@ -238,8 +245,11 @@ class ApplicationService:
             kind="analyze" if analysis else "run",
             config=self._normalized_config_dict(config),
         )
+        store = ProjectStore(config.output_dir, config.source)
+        store.begin(job_id=job_id, kind=record.kind, config=record.config)
         with self._lock:
             self._jobs[job_id] = record
+            self._project_stores[job_id] = store
         self._execute(record, config, analysis)
         snapshot = self.get_job(job_id)
         if snapshot["status"] == "failed":
@@ -256,14 +266,32 @@ class ApplicationService:
         record.started_at = datetime.now(timezone.utc).isoformat()
         runner = CommandRunner()
         record.runner = runner
+        store = self._project_stores.get(record.id)
 
         def progress(message: str) -> None:
             event = progress_to_event(message, record.id)
             if event.event in {"stage", "progress"}:
                 stage = str(event.data.get("stage") or record.stage)
                 record.stage = stage
+                if store:
+                    fraction = event.data.get("fraction")
+                    should_write = event.event == "stage"
+                    if isinstance(fraction, (int, float)):
+                        bucket = int(max(0.0, min(1.0, float(fraction))) * 20)
+                        old_bucket = self._project_progress_buckets.get(record.id)
+                        if old_bucket != bucket:
+                            self._project_progress_buckets[record.id] = bucket
+                            should_write = True
+                    if should_write:
+                        store.update_stage(
+                            stage=stage,
+                            title=str(event.data.get("title") or ""),
+                            progress=float(fraction) if isinstance(fraction, (int, float)) else None,
+                        )
             self._emit(event)
             if not str(message).startswith("__DOWNLOAD_PROGRESS__|"):
+                if store:
+                    store.append_log(str(message))
                 self._emit(AppEvent("log", {"level": "info", "message": str(message)}, record.id))
 
         runner.progress = progress
@@ -277,6 +305,8 @@ class ApplicationService:
             record.result = {str(k): str(v) for k, v in results.items()}
             record.status = "completed"
             record.stage = "completed"
+            if store:
+                store.finish(status="completed", artifacts=record.result)
             for kind, path in record.result.items():
                 self._emit(AppEvent("artifact", {"kind": kind, "path": path}, record.id))
             self._emit(AppEvent("finished", {"status": "completed", "result": record.result}, record.id))
@@ -284,16 +314,22 @@ class ApplicationService:
             record.status = "cancelled"
             record.stage = "cancelled"
             record.error = str(exc)
+            if store:
+                store.finish(status="cancelled", error=str(exc))
             self._emit(AppEvent("finished", {"status": "cancelled"}, record.id))
         except Exception as exc:
             record.status = "failed"
             record.stage = "failed"
             record.error = str(exc)
+            if store:
+                store.finish(status="failed", error=str(exc))
             self._emit(AppEvent("error", {"message": str(exc), "error_type": type(exc).__name__}, record.id))
             self._emit(AppEvent("finished", {"status": "failed"}, record.id))
         finally:
             record.ended_at = datetime.now(timezone.utc).isoformat()
             record.runner = None
+            with self._lock:
+                self._project_progress_buckets.pop(record.id, None)
 
     def cancel_job(self, job_id: str) -> bool:
         with self._lock:
@@ -315,3 +351,49 @@ class ApplicationService:
     def list_jobs(self) -> list[dict]:
         with self._lock:
             return [job.to_dict() for job in self._jobs.values()]
+
+    def list_projects(self, output_dir: str) -> list[dict]:
+        if not str(output_dir or "").strip():
+            raise ValueError("output_dir is required")
+        return list_project_manifests(Path(output_dir).expanduser())
+
+    def get_project(self, output_dir: str, project_id: str) -> dict:
+        if not str(output_dir or "").strip():
+            raise ValueError("output_dir is required")
+        if not str(project_id or "").strip():
+            raise ValueError("project_id is required")
+        return load_project(Path(output_dir).expanduser(), str(project_id))
+
+    def list_character_maps(self, output_dir: str) -> list[dict]:
+        if not str(output_dir or "").strip():
+            raise ValueError("output_dir is required")
+        from ..characters import list_character_maps
+        return list_character_maps(Path(output_dir).expanduser())
+
+    def get_characters(self, path: str) -> dict:
+        if not str(path or "").strip():
+            raise ValueError("path is required")
+        from ..characters import character_map_for_ui
+        return character_map_for_ui(Path(path).expanduser())
+
+    def update_character(self, path: str, character_id: str, updates: Dict[str, Any]) -> dict:
+        if not str(path or "").strip():
+            raise ValueError("path is required")
+        if not str(character_id or "").strip():
+            raise ValueError("character_id is required")
+        from ..characters import update_character_override
+        saved = update_character_override(Path(path).expanduser(), character_id, updates)
+        self._emit(AppEvent("character_updated", {"path": str(path), "character": saved}))
+        return saved
+
+    def preview_voice(self, voice: str, text: str, rate: int = 205) -> dict:
+        if platform.system() != "Darwin" or not shutil.which("say"):
+            raise RuntimeError("Voice preview currently requires macOS 'say'.")
+        clean_text = str(text or "").strip() or "This is the selected character speaking in English."
+        cmd = ["say", "-r", str(max(80, min(450, int(rate))))]
+        clean_voice = str(voice or "").strip()
+        if clean_voice:
+            cmd += ["-v", clean_voice]
+        cmd.append(clean_text)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"started": True}
