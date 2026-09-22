@@ -2,11 +2,25 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, Optional
+
+
+_MODEL_LOCK = threading.RLock()
+_CHATTERBOX_MODELS: dict[tuple[str, bool], object] = {}
+_KOKORO_PIPELINES: dict[str, object] = {}
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
 
 
 def piper_executable() -> Optional[str]:
@@ -36,6 +50,22 @@ def piper_available() -> bool:
     return piper_command() is not None
 
 
+def chatterbox_available() -> bool:
+    return _module_available("chatterbox") and _module_available("torchaudio")
+
+
+def kokoro_available() -> bool:
+    return _module_available("kokoro") and _module_available("soundfile")
+
+
+def premium_voice_status() -> dict:
+    return {
+        "chatterbox": chatterbox_available(),
+        "kokoro": kokoro_available(),
+        "piper": piper_available(),
+    }
+
+
 def resolve_piper_model(explicit: str = "") -> Path:
     raw = (explicit or os.getenv("PIPER_MODEL", "")).strip()
     if not raw:
@@ -63,7 +93,7 @@ def synthesize_piper(
     if not base_cmd:
         raise RuntimeError(
             "Piper was not found. Install piper-tts in the environment "
-            "or choose ElevenLabs/macOS TTS."
+            "or choose another TTS provider."
         )
     model = resolve_piper_model(model_path)
     out_wav.parent.mkdir(parents=True, exist_ok=True)
@@ -102,3 +132,204 @@ def synthesize_piper(
         raise RuntimeError(f"Piper failed ({proc.returncode}): {(stderr or '')[-2000:]}")
     if not out_wav.exists() or out_wav.stat().st_size <= 44:
         raise RuntimeError("Piper completed without producing usable audio.")
+
+
+def _best_torch_device(requested: str = "auto") -> str:
+    requested = (requested or "auto").strip().lower()
+    if requested != "auto":
+        return requested
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if (
+            platform.system() == "Darwin"
+            and hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        ):
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _load_chatterbox(device: str, turbo: bool):
+    key = (device, turbo)
+    with _MODEL_LOCK:
+        model = _CHATTERBOX_MODELS.get(key)
+        if model is not None:
+            return model
+
+        try:
+            if turbo:
+                from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+                model = ChatterboxTurboTTS.from_pretrained(device=device)
+            else:
+                from chatterbox.tts import ChatterboxTTS
+
+                model = ChatterboxTTS.from_pretrained(device=device)
+        except Exception as exc:
+            kind = "Turbo" if turbo else "standard"
+            raise RuntimeError(
+                f"Could not load Chatterbox {kind} on {device}: {exc}"
+            ) from exc
+
+        _CHATTERBOX_MODELS[key] = model
+        return model
+
+
+def synthesize_chatterbox(
+    text: str,
+    out_wav: Path,
+    *,
+    reference_audio: str = "",
+    expressiveness: float = 0.5,
+    device: str = "auto",
+    turbo: bool = True,
+    cancel_check: Callable[[], None] | None = None,
+) -> None:
+    """Generate high-quality English speech with Chatterbox.
+
+    A reference clip is optional. When supplied, it is only used because the
+    user explicitly selected it; AnimeDubber never extracts/clones source voices
+    automatically.
+    """
+    if not chatterbox_available():
+        raise RuntimeError(
+            "Chatterbox is not installed. Run macos/install_voice_engines.sh "
+            "or install chatterbox-tts in the AnimeDubber environment."
+        )
+
+    if cancel_check:
+        cancel_check()
+
+    import torchaudio as ta
+
+    resolved_device = _best_torch_device(device)
+    model = _load_chatterbox(resolved_device, turbo)
+    ref = str(reference_audio or "").strip()
+    if ref:
+        ref_path = Path(ref).expanduser().resolve()
+        if not ref_path.exists():
+            raise RuntimeError(f"Chatterbox reference clip does not exist: {ref_path}")
+        ref = str(ref_path)
+
+    exaggeration = max(0.0, min(1.5, float(expressiveness)))
+    kwargs = {"exaggeration": exaggeration}
+    if ref:
+        kwargs["audio_prompt_path"] = ref
+
+    with _MODEL_LOCK:
+        if cancel_check:
+            cancel_check()
+        wav = model.generate(str(text), **kwargs)
+
+    out_wav.parent.mkdir(parents=True, exist_ok=True)
+    ta.save(str(out_wav), wav.detach().cpu(), int(model.sr))
+    if cancel_check:
+        cancel_check()
+    if not out_wav.exists() or out_wav.stat().st_size <= 44:
+        raise RuntimeError("Chatterbox completed without producing usable audio.")
+
+
+def _load_kokoro(lang_code: str = "a"):
+    with _MODEL_LOCK:
+        pipeline = _KOKORO_PIPELINES.get(lang_code)
+        if pipeline is not None:
+            return pipeline
+        try:
+            from kokoro import KPipeline
+
+            pipeline = KPipeline(lang_code=lang_code)
+        except Exception as exc:
+            raise RuntimeError(f"Could not load Kokoro: {exc}") from exc
+        _KOKORO_PIPELINES[lang_code] = pipeline
+        return pipeline
+
+
+def synthesize_kokoro(
+    text: str,
+    out_wav: Path,
+    *,
+    voice: str = "af_heart",
+    rate: int = 205,
+    lang_code: str = "a",
+    cancel_check: Callable[[], None] | None = None,
+) -> None:
+    """Generate fast local English speech with Kokoro-82M."""
+    if not kokoro_available():
+        raise RuntimeError(
+            "Kokoro is not installed. Run macos/install_voice_engines.sh "
+            "or install kokoro>=0.9.4 and espeak-ng."
+        )
+
+    import numpy as np
+    import soundfile as sf
+
+    if cancel_check:
+        cancel_check()
+
+    safe_rate = max(80, min(450, int(rate)))
+    speed = max(0.55, min(1.80, safe_rate / 205.0))
+    selected_voice = str(voice or "af_heart").strip() or "af_heart"
+    pipeline = _load_kokoro(lang_code)
+
+    chunks = []
+    with _MODEL_LOCK:
+        for item in pipeline(str(text), voice=selected_voice, speed=speed):
+            if cancel_check:
+                cancel_check()
+            audio = getattr(item, "audio", None)
+            if audio is None:
+                try:
+                    _graphemes, _phonemes, audio = item
+                except Exception:
+                    audio = None
+            if audio is None:
+                continue
+            if hasattr(audio, "detach"):
+                audio = audio.detach().cpu().numpy()
+            elif hasattr(audio, "numpy"):
+                audio = audio.numpy()
+            chunks.append(np.asarray(audio, dtype=np.float32).reshape(-1))
+
+    if not chunks:
+        raise RuntimeError("Kokoro completed without producing audio.")
+
+    audio = np.concatenate(chunks)
+    out_wav.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_wav), audio, 24000)
+    if cancel_check:
+        cancel_check()
+    if not out_wav.exists() or out_wav.stat().st_size <= 44:
+        raise RuntimeError("Kokoro completed without producing usable audio.")
+
+
+KOKORO_VOICE_PRESETS = {
+    "female": {
+        "child": "af_heart",
+        "adult": "af_bella",
+        "older": "af_sarah",
+    },
+    "male": {
+        "child": "am_adam",
+        "adult": "am_adam",
+        "older": "am_michael",
+    },
+    "neutral": {
+        "child": "af_heart",
+        "adult": "af_heart",
+        "older": "am_michael",
+    },
+}
+
+
+def automatic_kokoro_voice(profile: dict | None) -> str:
+    profile = profile or {}
+    voice_class = str(profile.get("voice_class") or "neutral").lower()
+    age_group = str(profile.get("age_group") or "adult").lower()
+    voices = KOKORO_VOICE_PRESETS.get(voice_class, KOKORO_VOICE_PRESETS["neutral"])
+    return voices.get(age_group, voices["adult"])
