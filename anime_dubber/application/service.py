@@ -169,13 +169,7 @@ class ApplicationService:
             "current_pipeline": {
                 "engine": "v4_shared",
                 "processing_supported": bool(
-                    _module_available("demucs")
-                    and (mlx_ok or faster_ok)
-                    and (
-                        (system == "Darwin" and bool(shutil.which("say")))
-                        or piper_ok
-                        or True
-                    )
+                    _module_available("demucs") and (mlx_ok or faster_ok)
                 ),
                 "note": (
                     "Apple silicon can use MLX Whisper/MLX LLM/macOS voices. "
