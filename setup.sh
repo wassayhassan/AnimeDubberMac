@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_VERSION="4.0.0a1"
+APP_VERSION="4.0.0a2"
 echo "AI Anime English Dubber v${APP_VERSION} — setup"
 echo "========================================"
 

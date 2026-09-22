@@ -695,3 +695,98 @@ def write_character_map(payload: dict, path: Path) -> None:
 
 def load_character_map(path: Path) -> dict:
     return _load_json(path, {})
+
+
+EDITABLE_CHARACTER_FIELDS = {
+    "display_name",
+    "role",
+    "voice_class",
+    "age_group",
+    "macos_voice",
+    "tts_rate",
+    "pitch_semitones",
+    "voice_gain",
+    "notes",
+}
+
+
+def list_character_maps(output_dir: Path) -> List[dict]:
+    output = Path(output_dir).expanduser().resolve()
+    rows: List[dict] = []
+    for path in sorted(output.glob("*_characters.json")):
+        data = load_character_map(path)
+        if not isinstance(data, dict):
+            continue
+        chars = [x for x in data.get("characters", []) if isinstance(x, dict)]
+        rows.append({
+            "path": str(path),
+            "source_key": path.name.removesuffix("_characters.json"),
+            "series_id": str(data.get("series_id", "")),
+            "speaker_backend": str(data.get("speaker_backend", "")),
+            "character_count": len(chars),
+            "modified_at": path.stat().st_mtime,
+        })
+    rows.sort(key=lambda x: float(x.get("modified_at", 0.0)), reverse=True)
+    return rows
+
+
+def character_map_for_ui(path: Path) -> dict:
+    p = Path(path).expanduser().resolve()
+    data = load_character_map(p)
+    if not isinstance(data, dict) or not data:
+        raise FileNotFoundError(f"Character map not found or invalid: {p}")
+    return {
+        "path": str(p),
+        "version": data.get("version"),
+        "series_id": str(data.get("series_id", "")),
+        "speaker_backend": str(data.get("speaker_backend", "")),
+        "speaker_threshold": data.get("speaker_threshold"),
+        "characters": [x for x in data.get("characters", []) if isinstance(x, dict)],
+        "notes": dict(data.get("notes") or {}),
+    }
+
+
+def update_character_override(path: Path, character_id: str, updates: dict) -> dict:
+    """Persist one manually edited character and sync it to the series database."""
+    p = Path(path).expanduser().resolve()
+    data = load_character_map(p)
+    if not isinstance(data, dict) or not data:
+        raise FileNotFoundError(f"Character map not found or invalid: {p}")
+
+    items = [x for x in data.get("characters", []) if isinstance(x, dict)]
+    target = next((x for x in items if str(x.get("id")) == str(character_id)), None)
+    if target is None:
+        raise KeyError(f"Character not found: {character_id}")
+
+    for key, value in dict(updates or {}).items():
+        if key not in EDITABLE_CHARACTER_FIELDS:
+            continue
+        if key == "tts_rate":
+            value = max(80, min(450, int(value)))
+        elif key in {"pitch_semitones", "voice_gain"}:
+            value = float(value)
+        else:
+            value = str(value)
+        target[key] = value
+    target["manual"] = True
+    data["characters"] = items
+    write_character_map(data, p)
+
+    series_id = str(data.get("series_id", "")).strip()
+    db_path = _series_db_path(p.parent, series_id)
+    if db_path:
+        existing = _load_json(db_path, {"version": 1, "characters": []})
+        rows = [x for x in existing.get("characters", []) if isinstance(x, dict)]
+        by_id = {str(x.get("id")): x for x in rows}
+        saved = by_id.get(str(character_id))
+        if saved is None:
+            saved = dict(target)
+            by_id[str(character_id)] = saved
+        for key in EDITABLE_CHARACTER_FIELDS | {"manual"}:
+            if key in target:
+                saved[key] = target[key]
+        existing["version"] = int(existing.get("version", 1) or 1)
+        existing["characters"] = list(by_id.values())
+        db_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return dict(target)

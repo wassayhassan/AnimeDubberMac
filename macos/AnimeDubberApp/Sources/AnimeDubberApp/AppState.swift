@@ -33,6 +33,17 @@ final class AppState: ObservableObject {
     @Published var systemCheckItems: [SystemCheckItem] = []
     @Published var showingSystemCheck = false
 
+    @Published var projects: [ProjectSummary] = []
+    @Published var selectedProjectID: String?
+
+    @Published var characterMaps: [CharacterMapSummary] = []
+    @Published var selectedCharacterMapPath: String?
+    @Published var characters: [CharacterItem] = []
+    @Published var selectedCharacterID: String?
+    @Published var characterDraft = CharacterDraft()
+    @Published var installedVoices: [String] = []
+    @Published var characterSaveMessage = ""
+
     private let backend = BackendProcess()
 
     init() {
@@ -152,6 +163,111 @@ final class AppState: ObservableObject {
         }
     }
 
+    func refreshProjects() {
+        do {
+            _ = try backend.send(
+                method: "list_projects",
+                params: ["output_dir": outputFolder],
+                id: "projects-\(UUID().uuidString)"
+            )
+        } catch {
+            activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
+        }
+    }
+
+    func useProject(_ project: ProjectSummary) {
+        source = project.source
+        outputFolder = project.outputDir
+        seriesID = project.seriesID
+        selection = .newDub
+    }
+
+    func openProjectOutput(_ project: ProjectSummary) {
+        let preferred = project.artifacts["dubbed_video"]
+            ?? project.artifacts["english_srt"]
+            ?? project.artifacts.values.first
+        guard let preferred, !preferred.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: preferred)])
+    }
+
+    func refreshCharacterMaps() {
+        do {
+            _ = try backend.send(
+                method: "list_character_maps",
+                params: ["output_dir": outputFolder],
+                id: "character-maps-\(UUID().uuidString)"
+            )
+        } catch {
+            activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
+        }
+    }
+
+    func loadCharacterMap(_ path: String) {
+        guard !path.isEmpty else { return }
+        selectedCharacterMapPath = path
+        selectedCharacterID = nil
+        characters = []
+        characterDraft = CharacterDraft()
+        do {
+            _ = try backend.send(
+                method: "get_characters",
+                params: ["path": path],
+                id: "characters-\(UUID().uuidString)"
+            )
+        } catch {
+            activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
+        }
+    }
+
+    func selectCharacter(_ id: String?) {
+        selectedCharacterID = id
+        guard let id, let character = characters.first(where: { $0.id == id }) else {
+            characterDraft = CharacterDraft()
+            return
+        }
+        characterDraft = CharacterDraft(character: character)
+        characterSaveMessage = ""
+    }
+
+    func saveSelectedCharacter() {
+        guard let path = selectedCharacterMapPath,
+              let characterID = selectedCharacterID else { return }
+        do {
+            characterSaveMessage = "Saving…"
+            _ = try backend.send(
+                method: "update_character",
+                params: [
+                    "path": path,
+                    "character_id": characterID,
+                    "updates": characterDraft.updates,
+                ],
+                id: "save-character-\(UUID().uuidString)"
+            )
+        } catch {
+            characterSaveMessage = error.localizedDescription
+        }
+    }
+
+    func previewSelectedVoice() {
+        guard selectedCharacterID != nil else { return }
+        let text = characterDraft.displayName.isEmpty
+            ? "This is the selected character speaking in English."
+            : "This is \(characterDraft.displayName) speaking in English."
+        do {
+            _ = try backend.send(
+                method: "preview_voice",
+                params: [
+                    "voice": characterDraft.macosVoice,
+                    "text": text,
+                    "rate": characterDraft.ttsRate,
+                ],
+                id: "preview-\(UUID().uuidString)"
+            )
+        } catch {
+            activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
+        }
+    }
+
     func chooseSourceFile() {
         let panel = NSOpenPanel()
         panel.title = "Choose Source Video"
@@ -193,16 +309,26 @@ final class AppState: ObservableObject {
             let message = error?["message"] as? String ?? "Backend request failed."
             activity.append(ActivityEntry(kind: .error, message: message))
             statusText = message
+            if id.hasPrefix("save-character-") {
+                characterSaveMessage = message
+            }
             return
         }
 
-        let result = payload["result"] as? [String: Any] ?? [:]
+        let resultAny = payload["result"]
+        let result = resultAny as? [String: Any] ?? [:]
 
         switch id {
         case "hello":
             let version = result["version"] as? String ?? "ready"
             backendState = .ready(version: version)
             statusText = "Ready"
+            _ = try? backend.send(method: "list_voices", id: "voices")
+            refreshProjects()
+            refreshCharacterMaps()
+
+        case "voices":
+            installedVoices = resultAny as? [String] ?? []
 
         case "system-check":
             let checks = result["checks"] as? [[String: Any]] ?? []
@@ -221,7 +347,44 @@ final class AppState: ObservableObject {
                     activeJobID = jobID
                     statusText = "Queued"
                     activity.append(ActivityEntry(kind: .info, message: "Started \(jobID)."))
+                    refreshProjects()
                 }
+            } else if id.hasPrefix("projects-") {
+                let rows = resultAny as? [[String: Any]] ?? []
+                projects = rows.compactMap(ProjectSummary.init(dictionary:))
+                if selectedProjectID == nil {
+                    selectedProjectID = projects.first?.id
+                }
+            } else if id.hasPrefix("character-maps-") {
+                let rows = resultAny as? [[String: Any]] ?? []
+                characterMaps = rows.compactMap(CharacterMapSummary.init(dictionary:))
+                if let selected = selectedCharacterMapPath,
+                   characterMaps.contains(where: { $0.path == selected }) {
+                    loadCharacterMap(selected)
+                } else if let first = characterMaps.first {
+                    loadCharacterMap(first.path)
+                } else {
+                    selectedCharacterMapPath = nil
+                    characters = []
+                    selectedCharacterID = nil
+                }
+            } else if id.hasPrefix("characters-") {
+                let rows = result["characters"] as? [[String: Any]] ?? []
+                characters = rows.compactMap(CharacterItem.init(dictionary:))
+                    .sorted { $0.speakingShare > $1.speakingShare }
+                if let first = characters.first {
+                    selectCharacter(first.id)
+                } else {
+                    selectCharacter(nil)
+                }
+            } else if id.hasPrefix("save-character-") {
+                if let saved = CharacterItem(dictionary: result),
+                   let index = characters.firstIndex(where: { $0.id == saved.id }) {
+                    characters[index] = saved
+                    selectCharacter(saved.id)
+                }
+                characterSaveMessage = "Saved"
+                activity.append(ActivityEntry(kind: .info, message: "Saved character voice override."))
             }
         }
     }
@@ -264,6 +427,8 @@ final class AppState: ObservableObject {
             activeJobID = nil
             progressFraction = status == "completed" ? 1 : nil
             statusText = status == "completed" ? "Completed" : status.capitalized
+            refreshProjects()
+            refreshCharacterMaps()
 
         default:
             break
