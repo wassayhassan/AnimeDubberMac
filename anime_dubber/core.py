@@ -1106,10 +1106,16 @@ def prepare_tts_clip(
     if resolved_tts == "auto":
         if platform.system() == "Darwin" and shutil.which("say"):
             resolved_tts = "macos"
-        elif config.piper_model.strip() or os.getenv("PIPER_MODEL", "").strip():
-            resolved_tts = "piper"
         else:
-            resolved_tts = "elevenlabs"
+            from .providers.tts import piper_available
+            has_piper_model = bool(config.piper_model.strip() or os.getenv("PIPER_MODEL", "").strip())
+            has_elevenlabs_key = bool(
+                config.elevenlabs_api_key.strip() or os.getenv("ELEVENLABS_API_KEY", "").strip()
+            )
+            if piper_available() and (has_piper_model or not has_elevenlabs_key):
+                resolved_tts = "piper"
+            else:
+                resolved_tts = "elevenlabs"
 
     suffix = ".aiff" if resolved_tts == "macos" else (".wav" if resolved_tts == "piper" else ".mp3")
     source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
