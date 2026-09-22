@@ -1,23 +1,73 @@
-# AnimeDubber v3.6
+# AnimeDubber v4 alpha
 
-A macOS-first app for turning Chinese animation / manhua-drama videos into English-subtitled or English-dubbed videos while preserving the original soundtrack as much as possible.
+AnimeDubber turns Chinese animation / manhua-drama videos into English-subtitled or English-dubbed videos while preserving the original soundtrack as much as possible.
 
-## v3.6
+v4 is being rebuilt around a **native SwiftUI macOS frontend + shared Python application service + cross-platform CLI**.
 
-v3.6 is GUI-only. The old command-line interface has been removed.
+The complete design is documented in:
 
-The main window was redesigned around a cleaner macOS-style workflow:
+```text
+docs/SWIFTUI_REDESIGN_SPEC.md
+```
 
-- Project source, output folder, and Series ID are kept at the top.
-- General, Voices, and Audio settings are separated into tabs.
-- Character analysis and the Character Voices editor remain available from the main window.
-- Processing status and download progress are easier to scan.
-- The Activity log now renders real line breaks correctly, supports word wrapping, scrolling, error highlighting, and clearing.
-- The UI defaults to background ducking off.
+## Current v4 alpha status
 
-## Audio behavior
+Phase 1 is underway and now includes:
 
-The v3.4 reliability fixes and v3.5 soundtrack fixes are retained:
+- a shared Python `ApplicationService` used as the boundary for future SwiftUI and CLI callers;
+- structured jobs and structured progress/events;
+- a newline-delimited JSON stdin/stdout transport for the future SwiftUI app;
+- a restored Python CLI;
+- cancellation and job snapshots;
+- provider/capability detection;
+- tests for the service, protocol, and CLI;
+- all existing v3.4 timestamp/TTS reliability fixes;
+- all existing v3.5 soundtrack restoration fixes.
+
+The existing Tkinter GUI is still present **temporarily** so the current app remains usable while the SwiftUI frontend is built. It will be removed after the SwiftUI workflow reaches feature parity.
+
+## CLI
+
+The CLI is back as a permanent interface.
+
+Cross-platform command syntax:
+
+```bash
+python -m anime_dubber.cli doctor
+python -m anime_dubber.cli capabilities
+python -m anime_dubber.cli analyze VIDEO --series-id my-series
+python -m anime_dubber.cli run VIDEO --output ./output --series-id my-series
+```
+
+On Apple-silicon macOS, the existing MLX/macOS processing engine remains available.
+
+The CLI/application-service boundary itself is cross-platform. Windows/Linux processing providers such as Faster-Whisper and Piper are the next provider phase; the current legacy processing engine underneath the service is still macOS/MLX-specific. `doctor` and `capabilities` already expose this distinction instead of pretending unsupported providers are available.
+
+## SwiftUI backend protocol
+
+During development the future SwiftUI app will launch:
+
+```bash
+.venv/bin/python -m anime_dubber.transport.stdio_server
+```
+
+Communication is newline-delimited JSON over stdin/stdout, so AnimeDubber does not need a localhost HTTP server or network port.
+
+Example request:
+
+```json
+{"type":"request","id":"42","method":"hello","params":{}}
+```
+
+Example response:
+
+```json
+{"type":"response","id":"42","ok":true,"result":{"backend":"AnimeDubber","version":"4.0.0a1","protocol_version":1}}
+```
+
+Long-running jobs send asynchronous event messages for stages, progress, logs, warnings, artifacts, errors, and completion.
+
+## Audio behavior retained from v3.4/v3.5
 
 - malformed / reversed Whisper timestamps are sanitized before SRT and TTS;
 - duplicate micro-segments are collapsed;
@@ -25,24 +75,9 @@ The v3.4 reliability fixes and v3.5 soundtrack fixes are retained:
 - TTS lead-in silence is trimmed;
 - the untouched original soundtrack is preserved outside dialogue;
 - Demucs `no_vocals` is used only around detected source dialogue, with guard padding to reduce voice bleed;
-- optional ducking is intentionally gentle.
+- optional ducking is intentionally gentle and off by default.
 
-## Main features
-
-- Multi-character speaker analysis.
-- Persistent character voices across episodes using the same **Series ID**.
-- Lead / major / supporting / minor role estimates.
-- Child / adult / older and masculine / feminine / neutral voice-style estimates.
-- Normal / shouting / whispering delivery detection.
-- Automatic macOS voice assignment.
-- Optional ElevenLabs output.
-- Editable Character Voices window for manual overrides.
-- Local MLX Whisper transcription.
-- Local MLX LLM translation.
-- YouTube download progress with percentage, speed, ETA, and fallback attempt.
-- Resume support for long jobs.
-
-## Install on Apple silicon macOS
+## Current macOS install
 
 From Terminal:
 
@@ -51,35 +86,19 @@ cd /path/to/AnimeDubberMac
 /bin/zsh setup.sh
 ```
 
-The setup installs/checks the required system and Python dependencies, runs the bundled tests, and performs a system check.
-
-After setup, launch the app by double-clicking:
+The temporary Tkinter GUI can still be launched with:
 
 ```text
 Run GUI.command
 ```
 
-or from Terminal:
+or:
 
 ```bash
 .venv/bin/python -m anime_dubber.gui
 ```
 
-## Recommended settings
-
-For a long-form dub:
-
-- Translation: **Local LLM**
-- Detect speakers: **On**
-- Speaker backend: **auto**
-- TTS: **macOS local**
-- Background ducking: **Off**
-- Music / SFX: **1.0**
-- Resume cached work: **On**
-
-Use **Analyze Characters** first if you want to review voice assignments before rendering the complete dub.
-
-## Files produced
+## Current generated files
 
 Typical output:
 
@@ -89,28 +108,28 @@ Typical output:
 - `<key>_EN_DUB.mp4` — final English dub
 - `<key>_run.json` — run metadata
 
-Cached processing is stored in:
+Cached processing remains under:
 
 ```text
 .anime_dubber_work/
 ```
 
-Persistent series character data is stored in:
+Persistent series character data remains under:
 
 ```text
 .anime_dubber_series/
 ```
 
-Do not delete the work cache for a long job unless you intentionally want to start over.
+Existing caches are intentionally preserved through the v4 migration where compatible.
 
-## Models / software
+## Current models / software
 
 - MLX Whisper: `mlx-community/whisper-large-v3-turbo`
 - Local translator: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
 - Demucs: `htdemucs`
 - Optional speaker encoder: `speechbrain/spkrec-ecapa-voxceleb`
-- Local TTS: macOS `say`
+- macOS local TTS: `say`
 - Video/audio processing: FFmpeg
 - YouTube retrieval: app-local yt-dlp
 
-Model downloads happen on first use. After the models and source are cached, most of the local transcription, translation, and macOS TTS workflow can run locally.
+Planned cross-platform providers are documented in the SwiftUI redesign spec.
