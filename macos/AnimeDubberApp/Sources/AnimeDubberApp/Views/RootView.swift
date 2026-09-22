@@ -32,6 +32,9 @@ struct RootView: View {
             SystemCheckSheet()
                 .environmentObject(state)
         }
+        .onChange(of: state.settingsSnapshot) { _, _ in
+            state.savePreferences()
+        }
     }
 
     @ViewBuilder
