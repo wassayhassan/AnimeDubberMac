@@ -12,19 +12,24 @@ docs/SWIFTUI_REDESIGN_SPEC.md
 
 ## Current v4 alpha status
 
-Phase 1 is underway and now includes:
+Phase 3 is underway and now includes:
 
 - a shared Python `ApplicationService` used as the boundary for future SwiftUI and CLI callers;
 - structured jobs and structured progress/events;
 - a newline-delimited JSON stdin/stdout transport for the future SwiftUI app;
 - a restored Python CLI;
+- a native SwiftUI macOS shell connected to the Python backend;
+- persistent lightweight project manifests and project history;
+- a native Projects table with status, artifacts, and resume-oriented settings reuse;
+- a native Characters table and inspector for editing voice assignments;
+- persistent manual character overrides synchronized back to the series voice database;
 - cancellation and job snapshots;
 - provider/capability detection;
 - tests for the service, protocol, and CLI;
 - all existing v3.4 timestamp/TTS reliability fixes;
 - all existing v3.5 soundtrack restoration fixes.
 
-The existing Tkinter GUI is still present **temporarily** so the current app remains usable while the SwiftUI frontend is built. It will be removed after the SwiftUI workflow reaches feature parity.
+The existing Tkinter GUI is still present **temporarily** as a fallback while SwiftUI reaches full feature parity. The SwiftUI New Dub, Projects, Activity, System Check, and Characters workflows are now implemented.
 
 ## CLI
 
@@ -62,7 +67,7 @@ Example request:
 Example response:
 
 ```json
-{"type":"response","id":"42","ok":true,"result":{"backend":"AnimeDubber","version":"4.0.0a1","protocol_version":1}}
+{"type":"response","id":"42","ok":true,"result":{"backend":"AnimeDubber","version":"4.0.0a2","protocol_version":1}}
 ```
 
 Long-running jobs send asynchronous event messages for stages, progress, logs, warnings, artifacts, errors, and completion.
@@ -76,6 +81,27 @@ Long-running jobs send asynchronous event messages for stages, progress, logs, w
 - the untouched original soundtrack is preserved outside dialogue;
 - Demucs `no_vocals` is used only around detected source dialogue, with guard padding to reduce voice bleed;
 - optional ducking is intentionally gentle and off by default.
+
+## Native SwiftUI macOS app
+
+After setup, run the current native frontend from the repository:
+
+```bash
+cd macos/AnimeDubberApp
+swift run
+```
+
+During development the Swift app finds the repository root, launches the existing `.venv` Python backend, and communicates over JSONL stdin/stdout.
+
+Projects are stored as lightweight manifests under:
+
+```text
+.anime_dubber_project/
+```
+
+Existing v3.x `*_run.json` jobs are automatically surfaced in the Projects screen, so old completed jobs do not need to be reprocessed.
+
+Character overrides made in SwiftUI are written to the existing `*_characters.json` map and synchronized to `.anime_dubber_series/` so the same character voice persists across episodes.
 
 ## Current macOS install
 
