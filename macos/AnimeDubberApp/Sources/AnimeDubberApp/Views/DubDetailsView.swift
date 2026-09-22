@@ -103,6 +103,13 @@ struct DubDetailsView: View {
                         }
                     }
                     HStack {
+                        if ["paused", "failed", "cancelled"].contains(dub.status) ||
+                            (dub.status == "running" && state.activeJobID == nil) {
+                            Button("Resume This Dub", systemImage: "play.fill") {
+                                state.resumeDub(dub)
+                            }
+                            .disabled(state.activeJobID != nil)
+                        }
                         Button("Regenerate as New Version", systemImage: "arrow.clockwise") {
                             state.regenerate(dub)
                         }

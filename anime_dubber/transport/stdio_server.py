@@ -66,6 +66,18 @@ def serve() -> int:
                 if not job_id:
                     raise ValueError("job_id is required")
                 result = {"cancelled": service.cancel_job(job_id)}
+            elif method == "pause_job":
+                job_id = str(params.get("job_id") or "")
+                if not job_id:
+                    raise ValueError("job_id is required")
+                result = {"paused": service.pause_job(job_id)}
+            elif method == "resume_dub":
+                result = {"job_id": service.resume_dub(
+                    str(params.get("output_dir") or ""),
+                    str(params.get("project_id") or ""),
+                    str(params.get("dub_id") or ""),
+                    api_key=str(params.get("elevenlabs_api_key") or ""),
+                )}
             elif method == "get_job":
                 job_id = str(params.get("job_id") or "")
                 if not job_id:

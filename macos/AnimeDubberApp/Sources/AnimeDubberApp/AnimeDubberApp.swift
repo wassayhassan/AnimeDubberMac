@@ -27,7 +27,7 @@ struct AnimeDubberApp: App {
 
                 if state.activeJobID != nil {
                     Divider()
-                    Button("Stop Current Job") {
+                    Button("Pause Current Job") {
                         state.cancelActiveJob()
                     }
                     .keyboardShortcut(".", modifiers: .command)

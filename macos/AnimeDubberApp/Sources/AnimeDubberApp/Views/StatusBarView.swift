@@ -31,7 +31,7 @@ struct StatusBarView: View {
                 Spacer()
 
                 if state.activeJobID != nil {
-                    Button("Stop") {
+                    Button("Pause") {
                         state.cancelActiveJob()
                     }
                     .foregroundStyle(.red)

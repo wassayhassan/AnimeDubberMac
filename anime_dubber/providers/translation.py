@@ -51,6 +51,7 @@ def translate_with_ollama(
     single_prompt,
     cancel_check,
     progress,
+    on_batch=None,
 ) -> Dict[int, str]:
     """Run structured batched translations through a local Ollama server."""
     translated: Dict[int, str] = {}
@@ -88,6 +89,8 @@ def translate_with_ollama(
             parsed[idx] = cleaned
 
         translated.update({idx: text for idx, text in parsed.items() if text})
+        if on_batch:
+            on_batch(ids, parsed)
         done += len(ids)
         progress(f"Ollama translation: {min(done, total)}/{total} lines")
 

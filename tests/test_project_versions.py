@@ -1,13 +1,105 @@
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from anime_dubber.application.service import ApplicationService
-from anime_dubber.core import Config, Segment, run_pipeline
+from anime_dubber.core import Config, Segment, run_pipeline, translate_with_llm, LLM_MODEL, CommandRunner
+import hashlib
+import json
 
 
 class ProjectVersionsTests(unittest.TestCase):
+    def test_failed_dub_retries_in_place_after_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            first_service = ApplicationService()
+            project = first_service.create_project(temp, "video.mp4")
+            calls = []
+
+            def interrupted(config, progress, runner):
+                calls.append(config.version_id)
+                raise RuntimeError("TTS line 50 failed")
+
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=interrupted):
+                with self.assertRaisesRegex(RuntimeError, "TTS line 50 failed"):
+                    first_service.run_sync({"source": "video.mp4", "output_dir": temp})
+            dub = first_service.get_project(temp, project["project_id"])["dubs"][0]
+            resumed = ApplicationService()
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=lambda cfg, p, r: calls.append(cfg.version_id) or {}):
+                job_id = resumed.resume_dub(temp, project["project_id"], dub["id"])
+                for _ in range(100):
+                    if resumed.get_job(job_id)["status"] not in {"queued", "running"}:
+                        break
+                    time.sleep(.01)
+            self.assertEqual(resumed.get_job(job_id)["status"], "completed")
+            self.assertEqual(calls, [dub["id"], dub["id"]])
+            self.assertEqual(len(resumed.get_project(temp, project["project_id"])["dubs"]), 1)
+            for _ in range(100):
+                if resumed.get_project(temp, project["project_id"])["status"] == "completed":
+                    break
+                time.sleep(.01)
+
+    def test_pause_then_resume_reuses_the_same_version_and_keeps_subtitles(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            service = ApplicationService()
+            project = service.create_project(str(output), "source.mp4", "Episode")
+            at_voice = threading.Event()
+            calls = []
+
+            def pipeline(config, progress, runner):
+                calls.append(config.version_id)
+                subtitles = output / "versions" / config.version_id / "en.srt"
+                subtitles.parent.mkdir(parents=True, exist_ok=True)
+                if not subtitles.exists():
+                    subtitles.write_text("Translation finished")
+                runner.artifact("translated_srt", subtitles, "en")
+                if len(calls) == 1:
+                    at_voice.set()
+                    while not runner.cancel_event.wait(.01):
+                        pass
+                    runner.check_cancel()
+                self.assertTrue(config.resume)
+                self.assertFalse(config.force)
+                return {"translated_srt": subtitles}
+
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=pipeline):
+                first = service.start_job({"source": "source.mp4", "output_dir": temp})
+                self.assertTrue(at_voice.wait(2))
+                self.assertTrue(service.pause_job(first))
+                for _ in range(100):
+                    if service.get_job(first)["status"] == "paused":
+                        break
+                    time.sleep(.01)
+                self.assertEqual(service.get_job(first)["status"], "paused")
+                state = service.get_project(temp, project["project_id"])
+                self.assertTrue(Path(state["dubs"][0]["artifacts"]["translated_srt"]).exists())
+                dub_id = state["dubs"][0]["id"]
+                second = service.resume_dub(temp, project["project_id"], dub_id)
+                for _ in range(100):
+                    if service.get_job(second)["status"] == "completed":
+                        break
+                    time.sleep(.01)
+            self.assertEqual(service.get_job(second)["status"], "completed")
+            self.assertEqual(calls, [dub_id, dub_id])
+            self.assertEqual(len(service.get_project(temp, project["project_id"])["dubs"]), 1)
+
+    def test_old_english_translation_cache_is_reused_without_loading_model(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Config(source="source.mp4", output_dir=Path(temp), translation="llm")
+            segments = [Segment(0, 1, "你好")]
+            signature = hashlib.sha1(json.dumps({
+                "model": LLM_MODEL, "context": config.context,
+                "glossary": config.glossary, "source_text": ["你好"],
+            }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+            Path(temp, f"translations_llm_{signature}.json").write_text('{"0":"Hello"}')
+            result = translate_with_llm(segments, config, Path(temp), CommandRunner(), lambda _: None)
+            self.assertEqual(result[0].translated, "Hello")
+            # Migration writes a new signature but preserves the old artifact.
+            self.assertEqual(len(list(Path(temp).glob("translations_llm_*.json"))), 2)
+
     def test_multiple_dubs_preserve_versions_and_deletion_is_isolated(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp)

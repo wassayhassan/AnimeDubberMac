@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -155,8 +156,10 @@ class CommandRunner:
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen] = None
         self.cancel_event = threading.Event()
+        self.pause_requested = False
 
-    def cancel(self) -> None:
+    def cancel(self, *, pause: bool = False) -> None:
+        self.pause_requested = pause
         self.cancel_event.set()
         with self._lock:
             proc = self._proc
@@ -172,7 +175,7 @@ class CommandRunner:
 
     def check_cancel(self) -> None:
         if self.cancel_event.is_set():
-            raise CancelledError("Cancelled by user")
+            raise CancelledError("Paused by user" if self.pause_requested else "Cancelled by user")
 
     def run(
         self,
@@ -200,7 +203,7 @@ class CommandRunner:
             with self._lock:
                 self._proc = None
         if self.cancel_event.is_set():
-            raise CancelledError("Cancelled by user")
+            raise CancelledError("Paused by user" if self.pause_requested else "Cancelled by user")
         cp = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
         if check and cp.returncode != 0:
             tail = (stderr or stdout or "")[-4000:]
@@ -324,6 +327,35 @@ def write_vtt(segments: Sequence[Segment], path: Path, translated: bool = False)
             start = srt_timestamp(seg.start).replace(",", ".")
             end = srt_timestamp(seg.end).replace(",", ".")
             handle.write(f"{start} --> {end}\n{value}\n\n")
+
+
+def _complete_wav(path: Path, *, minimum_seconds: float = 0.01) -> bool:
+    """Reject interrupted WAV writes, including files with a valid but short header."""
+    try:
+        with wave.open(str(path), "rb") as handle:
+            frames = handle.getnframes()
+            expected = frames * handle.getnchannels() * handle.getsampwidth()
+            return (frames / handle.getframerate() >= minimum_seconds
+                    and path.stat().st_size >= expected + 44)
+    except (OSError, EOFError, ValueError, wave.Error, ZeroDivisionError):
+        return False
+
+
+def _atomic_media_run(runner: CommandRunner, cmd: List[str], path: Path) -> None:
+    """Publish a stage output only after ffmpeg exits successfully."""
+    temp = path.with_name(path.stem + ".partial" + path.suffix)
+    temp.unlink(missing_ok=True)
+    try:
+        runner.run([*cmd[:-1], str(temp)])
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _atomic_json_write(path: Path, payload: object) -> None:
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(path)
 
 
 def ffprobe_duration(path: Path, runner: CommandRunner) -> float:
@@ -497,20 +529,45 @@ def translate_with_llm(
     progress: ProgressCallback,
 ) -> List[Segment]:
     target = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "ja": "Japanese"}[config.target_language]
-    translation_signature = hashlib.sha1(json.dumps({
+    signature_inputs = {
         "model": LLM_MODEL,
         "target_language": config.target_language,
         "context": config.context,
         "glossary": config.glossary,
         "source_text": [s.text for s in segments],
-    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    }
+    translation_signature = hashlib.sha1(json.dumps(
+        signature_inputs, ensure_ascii=False, sort_keys=True
+    ).encode("utf-8")).hexdigest()[:12]
     cache_path = work_dir / f"translations_llm_{translation_signature}.json"
     cache: Dict[str, str] = {}
-    if config.resume and cache_path.exists() and not config.force:
-        try:
-            cache = json.loads(cache_path.read_text(encoding="utf-8"))
-        except Exception:
-            cache = {}
+    legacy_path = None
+    if config.target_language == "en":
+        old_inputs = dict(signature_inputs)
+        old_inputs.pop("target_language")
+        old_signature = hashlib.sha1(json.dumps(
+            old_inputs, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")).hexdigest()[:12]
+        legacy_path = work_dir / f"translations_llm_{old_signature}.json"
+    if config.resume and not config.force:
+        legacy_count = 0
+        for candidate in (legacy_path, cache_path):
+            if not candidate or not candidate.exists():
+                continue
+            try:
+                loaded = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    valid = {str(i): value for i, value in loaded.items()
+                             if str(i).isdigit() and int(i) < len(segments)
+                             and isinstance(value, str) and bool(value.strip())}
+                    cache.update(valid)
+                    if candidate == legacy_path:
+                        legacy_count = len(valid)
+            except (ValueError, OSError):
+                continue
+        if legacy_count:
+            _atomic_json_write(cache_path, cache)
+            progress(f"Reused {legacy_count} lines from the earlier English translation cache")
 
     pending = [i for i, s in enumerate(segments) if str(i) not in cache]
     if not pending:
@@ -578,7 +635,7 @@ def translate_with_llm(
         for i in ids:
             cache[str(i)] = parsed.get(i, segments[i].text)
             segments[i].translated = cache[str(i)]
-        cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_json_write(cache_path, cache)
         done += len(ids)
         progress(f"LLM translation: {min(done, total)}/{total} lines")
     return segments
@@ -607,7 +664,11 @@ def translate_with_ollama_provider(
     cache: Dict[str, str] = {}
     if config.resume and cache_path.exists() and not config.force:
         try:
-            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            loaded = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cache = {str(i): value for i, value in loaded.items()
+                         if str(i).isdigit() and int(i) < len(segments)
+                         and isinstance(value, str) and bool(value.strip())}
         except Exception:
             cache = {}
 
@@ -648,6 +709,11 @@ def translate_with_ollama_provider(
             f"Chinese: {segments[idx].text}"
         )
 
+    def save_batch(ids: List[int], values: Dict[int, str]) -> None:
+        for idx in ids:
+            cache[str(idx)] = values.get(idx) or segments[idx].text
+        _atomic_json_write(cache_path, cache)
+
     try:
         translated = translate_with_ollama(
             batches=batches,
@@ -657,6 +723,7 @@ def translate_with_ollama_provider(
             single_prompt=single_prompt,
             cancel_check=runner.check_cancel,
             progress=progress,
+            on_batch=save_batch,
         )
     except Exception as e:
         raise PipelineError(str(e)) from e
@@ -665,7 +732,7 @@ def translate_with_ollama_provider(
         value = translated.get(idx) or segments[idx].text
         cache[str(idx)] = value
         segments[idx].translated = value
-    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_json_write(cache_path, cache)
     return segments
 
 
@@ -717,6 +784,9 @@ def transcribe_audio(
         if task == "transcribe"
         else f"transcript_en_{provider}_v5_precise.json"
     )
+    if provider == "faster_whisper" and config.faster_whisper_model != "large-v3":
+        model_tag = hashlib.sha1(config.faster_whisper_model.encode("utf-8")).hexdigest()[:8]
+        cache_name = cache_name.replace("_v5_precise", f"_{model_tag}_v5_precise")
     cache = work_dir / cache_name
     legacy_cache = work_dir / (
         "transcript_zh_v3.json" if task == "transcribe" else "transcript_en_whisper_v3.json"
@@ -739,28 +809,23 @@ def transcribe_audio(
         )
 
     if config.resume and cache_to_read.exists() and not config.force:
-        data = json.loads(cache_to_read.read_text(encoding="utf-8"))
-        raw_cached = [Segment.from_dict(x) for x in data]
-        cleaned = sanitize_segments(raw_cached)
-        if len(cleaned) != len(raw_cached) or any(
-            abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
-            for a, b in zip(cleaned, raw_cached)
-        ):
-            progress(f"Repaired cached transcript timing: {len(raw_cached)} -> {len(cleaned)} segments")
-        if cache_to_read != cache or not cache.exists():
-            cache.write_text(
-                json.dumps([seg.to_dict() for seg in cleaned], ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        elif len(cleaned) != len(raw_cached) or any(
-            abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
-            for a, b in zip(cleaned, raw_cached)
-        ):
-            cache.write_text(
-                json.dumps([seg.to_dict() for seg in cleaned], ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        return cleaned
+        try:
+            data = json.loads(cache_to_read.read_text(encoding="utf-8"))
+            if not isinstance(data, list) or not data:
+                raise ValueError("Empty transcript cache")
+            raw_cached = [Segment.from_dict(x) for x in data]
+            cleaned = sanitize_segments(raw_cached)
+            if not cleaned:
+                raise ValueError("No usable transcript segments")
+            if len(cleaned) != len(raw_cached) or any(
+                abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
+                for a, b in zip(cleaned, raw_cached)
+            ):
+                progress(f"Repaired cached transcript timing: {len(raw_cached)} -> {len(cleaned)} segments")
+                _atomic_json_write(cache, [seg.to_dict() for seg in cleaned])
+            return cleaned
+        except (ValueError, TypeError, KeyError, OSError):
+            progress("Transcript cache was incomplete; rebuilding this stage…")
     initial_prompt = (
         "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
         if task == "transcribe" else None
@@ -829,7 +894,7 @@ def transcribe_audio(
     # lines can accidentally merge two different speakers.
     if not config.multi_character:
         segs = coalesce_segments(segs)
-    cache.write_text(json.dumps([s.to_dict() for s in segs], ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_json_write(cache, [s.to_dict() for s in segs])
     return segs
 
 
@@ -846,11 +911,11 @@ def _yt_dlp_base() -> list[str]:
 def _locate_downloaded_source(work_dir: Path, stdout: str = "") -> Optional[Path]:
     candidates = [Path(x.strip()) for x in (stdout or "").splitlines() if x.strip()]
     for p in reversed(candidates):
-        if p.exists() and p.suffix.lower() not in {".part", ".json", ".ytdl"}:
+        if p.is_file() and p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}:
             return p
     fallback = sorted(work_dir.glob("source.*"), key=lambda p: p.stat().st_mtime, reverse=True)
     for p in fallback:
-        if p.suffix.lower() not in {".part", ".json", ".ytdl"}:
+        if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"} and p.name.count(".") == 1:
             return p
     return None
 
@@ -862,11 +927,16 @@ def download_source(source: str, work_dir: Path, runner: CommandRunner, progress
             raise PipelineError(f"Input file does not exist: {p}")
         return p
 
-    cached = [p for p in work_dir.glob("source.*") if p.suffix.lower() not in {".part", ".json", ".ytdl"}]
+    cached = [p for p in work_dir.glob("source.*")
+              if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"} and p.name.count(".") == 1]
     if cached:
         chosen = max(cached, key=lambda p: p.stat().st_mtime)
-        progress(f"Using cached source video: {chosen.name}")
-        return chosen
+        try:
+            if ffprobe_duration(chosen, runner) > 0:
+                progress(f"Using cached source video: {chosen.name}")
+                return chosen
+        except PipelineError:
+            progress("Cached source video was incomplete; resuming download…")
 
     target = work_dir / "source.%(ext)s"
     common = [
@@ -972,19 +1042,19 @@ def download_source(source: str, work_dir: Path, runner: CommandRunner, progress
 
 def extract_audio(video: Path, work_dir: Path, runner: CommandRunner, progress: ProgressCallback, config: Config) -> Path:
     audio = work_dir / "original.wav"
-    if config.resume and audio.exists() and audio.stat().st_size > 1000 and not config.force:
+    if config.resume and _complete_wav(audio) and not config.force:
         return audio
     progress("Extracting original soundtrack…")
-    runner.run([
+    _atomic_media_run(runner, [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(video), "-vn", "-ac", "2", "-ar", str(SAMPLE_RATE),
         "-c:a", "pcm_s16le", str(audio)
-    ])
+    ], audio)
     return audio
 
 
 def _find_stem(stems_dir: Path, name: str) -> Optional[Path]:
-    files = list(stems_dir.rglob(name))
+    files = [p for p in stems_dir.rglob(name) if _complete_wav(p)]
     if not files:
         return None
     return max(files, key=lambda p: p.stat().st_size)
@@ -1000,8 +1070,18 @@ def separate_dialogue(
     stems_dir = work_dir / "stems"
     vocals = _find_stem(stems_dir, "vocals.wav")
     bg = _find_stem(stems_dir, "no_vocals.wav")
-    if config.resume and vocals and bg and not config.force:
+    audio_seconds = ffprobe_duration(audio, runner)
+    if (config.resume and vocals and bg and not config.force
+            and _complete_wav(vocals, minimum_seconds=audio_seconds * .98)
+            and _complete_wav(bg, minimum_seconds=audio_seconds * .98)):
         return vocals, bg
+    # Demucs writes directly to final paths. A stopped run can leave a valid
+    # short WAV with a repaired header; remove both stems before retrying.
+    if vocals or bg:
+        for old in stems_dir.rglob("vocals.wav"):
+            old.unlink(missing_ok=True)
+        for old in stems_dir.rglob("no_vocals.wav"):
+            old.unlink(missing_ok=True)
     stems_dir.mkdir(parents=True, exist_ok=True)
 
     devices: List[str]
@@ -1249,7 +1329,8 @@ def prepare_tts_clip(
     # Local engines emit WAV. Keep the raw and filtered files distinct: ffmpeg
     # cannot write to its own input, and a failed render must never look cached.
     wav = tts_dir / f"{index:06d}_{clip_signature}_processed.wav"
-    if config.resume and wav.exists() and wav.stat().st_size > 1000 and not config.force:
+    if config.resume and _complete_wav(wav) and not config.force:
+        runner.reused_voice_clips = getattr(runner, "reused_voice_clips", 0) + 1
         return wav
     tts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1412,7 +1493,7 @@ def render_dub_timeline(
         "chunk_seconds": int(config.chunk_seconds),
     }, sort_keys=True).encode("utf-8")).hexdigest()[:12]
     timeline = work_dir / f"dub_timeline_{timeline_signature}.wav"
-    if config.resume and timeline.exists() and timeline.stat().st_size > 1000 and not config.force:
+    if config.resume and _complete_wav(timeline, minimum_seconds=total_duration * .98) and not config.force:
         return timeline
 
     durations = [ffprobe_duration(p, runner) for p in clips]
@@ -1432,7 +1513,7 @@ def render_dub_timeline(
         dur = max(0.01, end - start)
         out = chunk_dir / f"chunk_{n:05d}.wav"
         chunks.append(out)
-        if config.resume and out.exists() and out.stat().st_size > 1000 and not config.force:
+        if config.resume and _complete_wav(out, minimum_seconds=dur * .98) and not config.force:
             progress(f"Rendering dub timeline: {n + 1}/{count} (cached)")
             continue
         overlaps = _clips_overlapping(clip_infos, start, end)
@@ -1467,17 +1548,17 @@ def render_dub_timeline(
             "-map", "[mix]", "-ac", "2", "-ar", str(SAMPLE_RATE),
             "-c:a", "pcm_s16le", str(out),
         ]
-        runner.run(cmd)
+        _atomic_media_run(runner, cmd, out)
         progress(f"Rendering dub timeline: {n + 1}/{count}")
 
     concat = work_dir / f"timeline_concat_{timeline_signature}.txt"
     concat_lines = [f"file {_ffconcat_quote(chunk_path)}\n" for chunk_path in chunks]
     concat.write_text("".join(concat_lines), encoding="utf-8")
-    runner.run([
+    _atomic_media_run(runner, [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", str(concat),
         "-c:a", "pcm_s16le", str(timeline),
-    ])
+    ], timeline)
     return timeline
 
 
@@ -1544,16 +1625,16 @@ def build_dialogue_safe_background(
         "guard": [DIALOGUE_GUARD_PRE, DIALOGUE_GUARD_POST],
     }, sort_keys=True).encode("utf-8")).hexdigest()[:12]
     out = work_dir / f"background_bed_{signature}.wav"
-    if config.resume and out.exists() and out.stat().st_size > 1000 and not config.force:
+    if config.resume and _complete_wav(out, minimum_seconds=total_duration * .98) and not config.force:
         return out
 
     if not intervals:
         progress("No dialogue regions found; using original soundtrack as background…")
-        runner.run([
+        _atomic_media_run(runner, [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(original), "-ac", "2", "-ar", str(SAMPLE_RATE),
             "-c:a", "pcm_s16le", str(out),
-        ])
+        ], out)
         return out
 
     progress("Restoring original music/SFX outside dialogue and suppressing source voices around speech…")
@@ -1572,7 +1653,7 @@ def build_dialogue_safe_background(
         dur = max(0.01, end - start)
         chunk = chunk_dir / f"chunk_{n:05d}.wav"
         chunks.append(chunk)
-        if config.resume and chunk.exists() and chunk.stat().st_size > 1000 and not config.force:
+        if config.resume and _complete_wav(chunk, minimum_seconds=dur * .98) and not config.force:
             continue
 
         local: List[Tuple[float, float]] = []
@@ -1584,11 +1665,11 @@ def build_dialogue_safe_background(
             local.append((max(0.0, a - start), min(dur, b - start)))
 
         if not local:
-            runner.run([
+            _atomic_media_run(runner, [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(original),
                 "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(chunk),
-            ])
+            ], chunk)
             continue
 
         # Chunk-local expressions keep ffmpeg command size manageable even for
@@ -1603,21 +1684,21 @@ def build_dialogue_safe_background(
             "[o][s]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
             "alimiter=limit=0.98[bed]"
         )
-        runner.run([
+        _atomic_media_run(runner, [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(original),
             "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(separated_background),
             "-filter_complex", filt, "-map", "[bed]",
             "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(chunk),
-        ])
+        ], chunk)
 
     concat = work_dir / f"background_concat_{signature}.txt"
     concat.write_text("".join(f"file {_ffconcat_quote(x)}\n" for x in chunks), encoding="utf-8")
-    runner.run([
+    _atomic_media_run(runner, [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", str(concat),
         "-c:a", "pcm_s16le", str(out),
-    ])
+    ], out)
     return out
 
 def mix_background_and_dub(
@@ -1636,11 +1717,23 @@ def mix_background_and_dub(
         "ducking": config.ducking,
     }, sort_keys=True).encode("utf-8")).hexdigest()[:12]
     out = work_dir / f"mixed_english_{mix_signature}.m4a"
-    if config.resume and out.exists() and out.stat().st_size > 1000 and not config.force:
-        return out
-    progress("Mixing dub dialogue with original music and sound effects…")
-
     bg_duration = ffprobe_duration(background, runner)
+    if config.resume and out.exists() and out.stat().st_size > 1000 and not config.force:
+        try:
+            if ffprobe_duration(out, runner) >= bg_duration * .98:
+                return out
+        except PipelineError:
+            pass
+    progress("Mixing dub dialogue with original music and sound effects…")
+    temp = out.with_name(out.stem + ".partial" + out.suffix)
+    temp.unlink(missing_ok=True)
+    try:
+        return _mix_to_temp(background, dub, temp, out, bg_duration, config, runner, progress)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _mix_to_temp(background, dub, temp, out, bg_duration, config, runner, progress):
     if config.ducking:
         filt = (
             f"[0:a]volume={config.background_volume:.4f}[bg];"
@@ -1653,9 +1746,10 @@ def mix_background_and_dub(
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(background), "-i", str(dub),
             "-filter_complex", filt, "-map", "[mix]",
-            "-t", f"{bg_duration:.6f}", "-c:a", "aac", "-b:a", "192k", str(out),
+            "-t", f"{bg_duration:.6f}", "-c:a", "aac", "-b:a", "192k", str(temp),
         ], check=False)
         if cp.returncode == 0:
+            temp.replace(out)
             return out
         progress("Background ducking filter was unavailable; using a standard mix instead…")
 
@@ -1669,22 +1763,33 @@ def mix_background_and_dub(
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(background), "-i", str(dub),
         "-filter_complex", filt, "-map", "[mix]",
-        "-t", f"{bg_duration:.6f}", "-c:a", "aac", "-b:a", "192k", str(out),
+        "-t", f"{bg_duration:.6f}", "-c:a", "aac", "-b:a", "192k", str(temp),
     ])
+    temp.replace(out)
     return out
 
 
 def mux_video(video: Path, audio: Path, final: Path, runner: CommandRunner, progress: ProgressCallback) -> None:
     final.parent.mkdir(parents=True, exist_ok=True)
     progress("Creating final dubbed MP4…")
+    temp = final.with_name(final.stem + ".partial" + final.suffix)
+    temp.unlink(missing_ok=True)
+    try:
+        _mux_to_temp(video, audio, temp, final, runner)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _mux_to_temp(video: Path, audio: Path, temp: Path, final: Path, runner: CommandRunner) -> None:
     cp = runner.run([
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(video), "-i", str(audio),
         "-map", "0:v:0?", "-map", "1:a:0",
         "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart",
-        "-shortest", str(final),
+        "-shortest", str(temp),
     ], check=False)
     if cp.returncode == 0:
+        temp.replace(final)
         return
     # Fallback for source codecs that cannot be copied into MP4.
     codec = "h264_videotoolbox" if platform.system() == "Darwin" else "libx264"
@@ -1693,8 +1798,9 @@ def mux_video(video: Path, audio: Path, final: Path, runner: CommandRunner, prog
         "-i", str(video), "-i", str(audio),
         "-map", "0:v:0?", "-map", "1:a:0",
         "-c:v", codec, "-b:v", "6M", "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart", "-shortest", str(final),
+        "-movflags", "+faststart", "-shortest", str(temp),
     ])
+    temp.replace(final)
 
 
 def doctor() -> Tuple[bool, List[str]]:
@@ -1882,7 +1988,8 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         clips.append(prepare_tts_clip(seg, i, tts_dir, config, runner, progress, profile=profile))
         if (i + 1) % 5 == 0 or i + 1 == total_lines:
             who = f" ({seg.speaker_id}, {seg.style})" if seg.speaker_id else ""
-            progress(f"Generating dub voice: {i + 1}/{total_lines}{who}")
+            reused = getattr(runner, "reused_voice_clips", 0)
+            progress(f"Generating dub voice: {i + 1}/{total_lines}{who} · {reused} reused")
 
     total_duration = ffprobe_duration(audio, runner)
     duration_callback = getattr(runner, "duration", None)
