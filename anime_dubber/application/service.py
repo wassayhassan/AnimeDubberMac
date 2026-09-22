@@ -186,7 +186,12 @@ class ApplicationService:
             path = shutil.which(exe)
             checks.append({"name": exe, "ok": bool(path), "detail": path or "not found"})
         yt = shutil.which("yt-dlp") or shutil.which("yt_dlp")
-        checks.append({"name": "yt-dlp", "ok": bool(yt), "detail": yt or "not found"})
+        yt_module = _module_available("yt_dlp")
+        checks.append({
+            "name": "yt-dlp",
+            "ok": bool(yt or yt_module),
+            "detail": yt or ("Python module available" if yt_module else "not found"),
+        })
         checks.append({
             "name": "demucs",
             "ok": bool(caps["providers"]["stems"]["demucs"]),
