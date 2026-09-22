@@ -560,6 +560,89 @@ def translate_with_llm(
     return segments
 
 
+def translate_with_ollama_provider(
+    segments: List[Segment],
+    config: Config,
+    work_dir: Path,
+    runner: CommandRunner,
+    progress: ProgressCallback,
+) -> List[Segment]:
+    from .providers.translation import translate_with_ollama
+
+    translation_signature = hashlib.sha1(json.dumps({
+        "provider": "ollama",
+        "model": config.ollama_model,
+        "url": config.ollama_url,
+        "context": config.context,
+        "glossary": config.glossary,
+        "source_text": [s.text for s in segments],
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    cache_path = work_dir / f"translations_ollama_{translation_signature}.json"
+    cache: Dict[str, str] = {}
+    if config.resume and cache_path.exists() and not config.force:
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            cache = {}
+
+    pending = [i for i, seg in enumerate(segments) if str(i) not in cache]
+    if not pending:
+        for i, seg in enumerate(segments):
+            seg.translated = cache.get(str(i), "")
+        return segments
+
+    progress(f"Using Ollama translation model: {config.ollama_model}")
+    gl = glossary_string(config.glossary)
+    batch_size = 12
+    batches = []
+    for off in range(0, len(pending), batch_size):
+        ids = pending[off:off + batch_size]
+        payload = [{"id": i, "text": segments[i].text} for i in ids]
+        prompt = (
+            "Translate the following Chinese dialogue into natural concise English for an episodic "
+            "xianxia/cultivation animation.\n"
+            "Rules:\n"
+            "1. Return ONLY a JSON array of objects with exactly the same ids, each shaped "
+            "{\"id\": number, \"text\": \"English\"}.\n"
+            "2. Do not omit, merge, summarize, explain, or add dialogue.\n"
+            "3. Keep proper names, sect names, realm names, and terminology consistent.\n"
+            "4. Prefer short spoken English so dubbing can fit the original timing.\n"
+            f"Context: {config.context}\n"
+            f"Glossary: {gl}\n"
+            f"Input: {json.dumps(payload, ensure_ascii=False)}"
+        )
+        batches.append((ids, prompt))
+
+    def single_prompt(idx: int) -> str:
+        return (
+            "Translate this Chinese xianxia dialogue into concise natural English. "
+            "Return ONLY the English translation, no quotes or explanation.\n"
+            f"Context: {config.context}\n"
+            f"Glossary: {gl}\n"
+            f"Chinese: {segments[idx].text}"
+        )
+
+    try:
+        translated = translate_with_ollama(
+            batches=batches,
+            base_url=config.ollama_url,
+            model=config.ollama_model,
+            parse_batch=parse_translation_response,
+            single_prompt=single_prompt,
+            cancel_check=runner.check_cancel,
+            progress=progress,
+        )
+    except Exception as e:
+        raise PipelineError(str(e)) from e
+
+    for idx in pending:
+        value = translated.get(idx) or segments[idx].text
+        cache[str(idx)] = value
+        segments[idx].translated = value
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    return segments
+
+
 def transcribe_audio(
     audio: Path,
     config: Config,
@@ -1518,13 +1601,26 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     zh_srt = out / f"{key}_zh.srt"
     write_srt(zh_segments, zh_srt, translated=False)
 
-    if config.translation == "llm":
+    translation_mode = config.translation
+    if translation_mode == "auto":
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            try:
+                import mlx_lm  # noqa: F401
+                translation_mode = "llm"
+            except Exception:
+                translation_mode = "whisper"
+        else:
+            translation_mode = "whisper"
+
+    if translation_mode == "llm":
         segments = translate_with_llm(zh_segments, config, work, runner, progress)
-    elif config.translation == "whisper":
+    elif translation_mode == "ollama":
+        segments = translate_with_ollama_provider(zh_segments, config, work, runner, progress)
+    elif translation_mode == "whisper":
         en_whisper = transcribe_audio(transcript_audio, config, work, runner, progress, task="translate")
         segments = [Segment(s.start, s.end, s.text, s.text) for s in en_whisper]
     else:
-        raise PipelineError(f"Unsupported translation mode: {config.translation}")
+        raise PipelineError(f"Unsupported translation mode: {translation_mode}")
 
     profiles = []
     profile_map: Dict[str, dict] = {}
