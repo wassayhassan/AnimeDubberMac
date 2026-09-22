@@ -46,6 +46,7 @@ class PipelineOrchestrationTests(unittest.TestCase):
                  patch("anime_dubber.core.prepare_tts_clip", side_effect=fake_tts), \
                  patch("anime_dubber.core.ffprobe_duration", return_value=2.0), \
                  patch("anime_dubber.core.render_dub_timeline", return_value=timeline), \
+                 patch("anime_dubber.core.build_dialogue_safe_background", return_value=bg), \
                  patch("anime_dubber.core.mix_background_and_dub", return_value=mixed), \
                  patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, f, _r, _p: f.write_bytes(b"final")):
                 results = run_pipeline(cfg, lambda _m: None)
