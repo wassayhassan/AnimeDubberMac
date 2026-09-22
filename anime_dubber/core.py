@@ -108,9 +108,17 @@ class Config:
     source: str
     output_dir: Path
     mode: str = "dub"  # subtitles|dub
-    translation: str = "llm"  # llm|whisper
-    tts_engine: str = "macos"  # macos|elevenlabs
+    asr_provider: str = "auto"  # auto|mlx_whisper|faster_whisper
+    faster_whisper_model: str = "large-v3"
+    faster_whisper_device: str = "auto"  # auto|cpu|cuda
+    faster_whisper_compute_type: str = "auto"
+    translation: str = "llm"  # auto|llm|ollama|whisper
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:4b"
+    tts_engine: str = "macos"  # auto|macos|piper|elevenlabs
     voice: str = ""
+    piper_model: str = ""
+    piper_speaker: int = -1
     tts_rate: int = 210
     context: str = DEFAULT_CONTEXT
     glossary: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_GLOSSARY))
@@ -552,6 +560,89 @@ def translate_with_llm(
     return segments
 
 
+def translate_with_ollama_provider(
+    segments: List[Segment],
+    config: Config,
+    work_dir: Path,
+    runner: CommandRunner,
+    progress: ProgressCallback,
+) -> List[Segment]:
+    from .providers.translation import translate_with_ollama
+
+    translation_signature = hashlib.sha1(json.dumps({
+        "provider": "ollama",
+        "model": config.ollama_model,
+        "url": config.ollama_url,
+        "context": config.context,
+        "glossary": config.glossary,
+        "source_text": [s.text for s in segments],
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    cache_path = work_dir / f"translations_ollama_{translation_signature}.json"
+    cache: Dict[str, str] = {}
+    if config.resume and cache_path.exists() and not config.force:
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            cache = {}
+
+    pending = [i for i, seg in enumerate(segments) if str(i) not in cache]
+    if not pending:
+        for i, seg in enumerate(segments):
+            seg.translated = cache.get(str(i), "")
+        return segments
+
+    progress(f"Using Ollama translation model: {config.ollama_model}")
+    gl = glossary_string(config.glossary)
+    batch_size = 12
+    batches = []
+    for off in range(0, len(pending), batch_size):
+        ids = pending[off:off + batch_size]
+        payload = [{"id": i, "text": segments[i].text} for i in ids]
+        prompt = (
+            "Translate the following Chinese dialogue into natural concise English for an episodic "
+            "xianxia/cultivation animation.\n"
+            "Rules:\n"
+            "1. Return ONLY a JSON array of objects with exactly the same ids, each shaped "
+            "{\"id\": number, \"text\": \"English\"}.\n"
+            "2. Do not omit, merge, summarize, explain, or add dialogue.\n"
+            "3. Keep proper names, sect names, realm names, and terminology consistent.\n"
+            "4. Prefer short spoken English so dubbing can fit the original timing.\n"
+            f"Context: {config.context}\n"
+            f"Glossary: {gl}\n"
+            f"Input: {json.dumps(payload, ensure_ascii=False)}"
+        )
+        batches.append((ids, prompt))
+
+    def single_prompt(idx: int) -> str:
+        return (
+            "Translate this Chinese xianxia dialogue into concise natural English. "
+            "Return ONLY the English translation, no quotes or explanation.\n"
+            f"Context: {config.context}\n"
+            f"Glossary: {gl}\n"
+            f"Chinese: {segments[idx].text}"
+        )
+
+    try:
+        translated = translate_with_ollama(
+            batches=batches,
+            base_url=config.ollama_url,
+            model=config.ollama_model,
+            parse_batch=parse_translation_response,
+            single_prompt=single_prompt,
+            cancel_check=runner.check_cancel,
+            progress=progress,
+        )
+    except Exception as e:
+        raise PipelineError(str(e)) from e
+
+    for idx in pending:
+        value = translated.get(idx) or segments[idx].text
+        cache[str(idx)] = value
+        segments[idx].translated = value
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    return segments
+
+
 def transcribe_audio(
     audio: Path,
     config: Config,
@@ -561,40 +652,106 @@ def transcribe_audio(
     *,
     task: str = "transcribe",
 ) -> List[Segment]:
-    cache_name = "transcript_zh_v3.json" if task == "transcribe" else "transcript_en_whisper_v3.json"
+    from .providers.asr import resolve_asr_provider
+
+    provider = resolve_asr_provider(config.asr_provider)
+    cache_name = (
+        f"transcript_zh_{provider}_v4.json"
+        if task == "transcribe"
+        else f"transcript_en_{provider}_v4.json"
+    )
     cache = work_dir / cache_name
-    if config.resume and cache.exists() and not config.force:
-        data = json.loads(cache.read_text(encoding="utf-8"))
+    legacy_cache = work_dir / (
+        "transcript_zh_v3.json" if task == "transcribe" else "transcript_en_whisper_v3.json"
+    )
+    cache_to_read = cache
+    if (
+        config.resume
+        and not config.force
+        and not cache.exists()
+        and provider == "mlx_whisper"
+        and legacy_cache.exists()
+    ):
+        cache_to_read = legacy_cache
+        progress(f"Reusing legacy MLX transcript cache: {legacy_cache.name}")
+
+    if config.resume and cache_to_read.exists() and not config.force:
+        data = json.loads(cache_to_read.read_text(encoding="utf-8"))
         raw_cached = [Segment.from_dict(x) for x in data]
         cleaned = sanitize_segments(raw_cached)
         if len(cleaned) != len(raw_cached) or any(
             abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
             for a, b in zip(cleaned, raw_cached)
         ):
-            cache.write_text(json.dumps([s.to_dict() for s in cleaned], ensure_ascii=False, indent=2), encoding="utf-8")
             progress(f"Repaired cached transcript timing: {len(raw_cached)} -> {len(cleaned)} segments")
+        if cache_to_read != cache or not cache.exists():
+            cache.write_text(
+                json.dumps([seg.to_dict() for seg in cleaned], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        elif len(cleaned) != len(raw_cached) or any(
+            abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
+            for a, b in zip(cleaned, raw_cached)
+        ):
+            cache.write_text(
+                json.dumps([seg.to_dict() for seg in cleaned], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return cleaned
-    try:
-        import mlx_whisper
-    except Exception as e:
-        raise PipelineError("mlx-whisper is not installed correctly. Re-run setup.sh") from e
-
-    progress("Transcribing Mandarin with MLX-Whisper…" if task == "transcribe" else "Translating speech directly with Whisper…")
-    runner.check_cancel()
-    result = mlx_whisper.transcribe(
-        str(audio),
-        path_or_hf_repo=WHISPER_MODEL,
-        language="zh",
-        task=task,
-        initial_prompt=(
-            "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
-            if task == "transcribe" else None
-        ),
-        word_timestamps=False,
+    initial_prompt = (
+        "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
+        if task == "transcribe" else None
     )
+    runner.check_cancel()
+
+    if provider == "mlx_whisper":
+        try:
+            import mlx_whisper
+        except Exception as e:
+            raise PipelineError(
+                "MLX Whisper was selected but mlx-whisper is not installed. "
+                "On Windows/Linux install faster-whisper and use --asr faster-whisper."
+            ) from e
+        progress(
+            "Transcribing Mandarin with MLX-Whisper…"
+            if task == "transcribe"
+            else "Translating speech directly with MLX-Whisper…"
+        )
+        result = mlx_whisper.transcribe(
+            str(audio),
+            path_or_hf_repo=WHISPER_MODEL,
+            language="zh",
+            task=task,
+            initial_prompt=initial_prompt,
+            word_timestamps=False,
+        )
+        provider_rows = result.get("segments", [])
+    elif provider == "faster_whisper":
+        from .providers.asr import faster_whisper_segments
+        progress(
+            f"Transcribing Mandarin with Faster-Whisper ({config.faster_whisper_model})…"
+            if task == "transcribe"
+            else f"Translating speech directly with Faster-Whisper ({config.faster_whisper_model})…"
+        )
+        try:
+            provider_rows = faster_whisper_segments(
+                audio,
+                task=task,
+                model_name=config.faster_whisper_model,
+                device=config.faster_whisper_device,
+                compute_type=config.faster_whisper_compute_type,
+                language="zh",
+                initial_prompt=initial_prompt,
+                cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    else:
+        raise PipelineError(f"Unsupported ASR provider: {provider}")
+
     raw_segs = [
         Segment(float(x.get("start", 0)), float(x.get("end", 0)), str(x.get("text", "")).strip())
-        for x in result.get("segments", [])
+        for x in provider_rows
         if str(x.get("text", "")).strip()
     ]
     segs = sanitize_segments(raw_segs)
@@ -784,7 +941,16 @@ def separate_dialogue(
 
     devices: List[str]
     if config.demucs_device == "auto":
-        devices = ["mps", "cpu"] if platform.system() == "Darwin" else ["cpu"]
+        if platform.system() == "Darwin":
+            devices = ["mps", "cpu"]
+        else:
+            devices = ["cpu"]
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    devices = ["cuda", "cpu"]
+            except Exception:
+                pass
     else:
         devices = [config.demucs_device]
 
@@ -807,7 +973,7 @@ def separate_dialogue(
                 return vocals, bg
         last_error = (cp.stderr or cp.stdout or "")[-3000:]
         if device != devices[-1]:
-            progress("Demucs MPS failed; retrying on CPU for compatibility…")
+            progress(f"Demucs {device} failed; retrying on {devices[-1]} for compatibility…")
     raise PipelineError(f"Demucs could not separate the soundtrack.\n{last_error or ''}")
 
 
@@ -943,7 +1109,23 @@ def prepare_tts_clip(
         gain *= 0.64
 
     eleven_voice = str(profile.get("elevenlabs_voice_id", "") or config.elevenlabs_voice_id)
-    clip_signature = hashlib.sha1(json.dumps({
+
+    resolved_tts = config.tts_engine
+    if resolved_tts == "auto":
+        if platform.system() == "Darwin" and shutil.which("say"):
+            resolved_tts = "macos"
+        else:
+            from .providers.tts import piper_available
+            has_piper_model = bool(config.piper_model.strip() or os.getenv("PIPER_MODEL", "").strip())
+            has_elevenlabs_key = bool(
+                config.elevenlabs_api_key.strip() or os.getenv("ELEVENLABS_API_KEY", "").strip()
+            )
+            if piper_available() and (has_piper_model or not has_elevenlabs_key):
+                resolved_tts = "piper"
+            else:
+                resolved_tts = "elevenlabs"
+
+    signature_data = {
         "text": text,
         "engine": config.tts_engine,
         "voice": chosen_voice,
@@ -955,16 +1137,39 @@ def prepare_tts_clip(
         "eleven_voice": eleven_voice,
         "eleven_model": config.elevenlabs_model_id,
         "timing": [round(seg.start, 3), round(seg.end, 3)],
-    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    }
+    # Preserve v3.5 cache signatures for macOS/ElevenLabs. Piper-specific
+    # configuration only participates when Piper is actually selected.
+    if resolved_tts == "piper":
+        signature_data["piper_model"] = config.piper_model or os.getenv("PIPER_MODEL", "")
+        signature_data["piper_speaker"] = config.piper_speaker
+
+    clip_signature = hashlib.sha1(
+        json.dumps(signature_data, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
     wav = tts_dir / f"{index:06d}_{clip_signature}.wav"
     if config.resume and wav.exists() and wav.stat().st_size > 1000 and not config.force:
         return wav
     tts_dir.mkdir(parents=True, exist_ok=True)
-    source_audio = tts_dir / (f"{index:06d}_{clip_signature}.aiff" if config.tts_engine == "macos" else f"{index:06d}_{clip_signature}.mp3")
-    if config.tts_engine == "macos":
+
+    suffix = ".aiff" if resolved_tts == "macos" else (".wav" if resolved_tts == "piper" else ".mp3")
+    source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
+    if resolved_tts == "macos":
         synthesize_macos(text, source_audio, config, runner, voice=chosen_voice, rate=base_rate)
-    elif config.tts_engine == "elevenlabs":
-        # Reuse existing API method with a temporary per-character voice override.
+    elif resolved_tts == "piper":
+        from .providers.tts import synthesize_piper
+        try:
+            synthesize_piper(
+                text,
+                source_audio,
+                model_path=config.piper_model,
+                rate=base_rate,
+                speaker=(config.piper_speaker if config.piper_speaker >= 0 else None),
+                cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    elif resolved_tts == "elevenlabs":
         old = config.elevenlabs_voice_id
         config.elevenlabs_voice_id = eleven_voice
         try:
@@ -972,7 +1177,7 @@ def prepare_tts_clip(
         finally:
             config.elevenlabs_voice_id = old
     else:
-        raise PipelineError(f"Unsupported TTS engine: {config.tts_engine}")
+        raise PipelineError(f"Unsupported TTS engine: {resolved_tts}")
 
     source_dur = max(0.05, ffprobe_duration(source_audio, runner))
     target_dur = max(0.18, seg.end - seg.start)
@@ -1445,13 +1650,26 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     zh_srt = out / f"{key}_zh.srt"
     write_srt(zh_segments, zh_srt, translated=False)
 
-    if config.translation == "llm":
+    translation_mode = config.translation
+    if translation_mode == "auto":
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            try:
+                import mlx_lm  # noqa: F401
+                translation_mode = "llm"
+            except Exception:
+                translation_mode = "whisper"
+        else:
+            translation_mode = "whisper"
+
+    if translation_mode == "llm":
         segments = translate_with_llm(zh_segments, config, work, runner, progress)
-    elif config.translation == "whisper":
+    elif translation_mode == "ollama":
+        segments = translate_with_ollama_provider(zh_segments, config, work, runner, progress)
+    elif translation_mode == "whisper":
         en_whisper = transcribe_audio(transcript_audio, config, work, runner, progress, task="translate")
         segments = [Segment(s.start, s.end, s.text, s.text) for s in en_whisper]
     else:
-        raise PipelineError(f"Unsupported translation mode: {config.translation}")
+        raise PipelineError(f"Unsupported translation mode: {translation_mode}")
 
     profiles = []
     profile_map: Dict[str, dict] = {}
@@ -1517,8 +1735,12 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     metadata = {
         "source": config.source,
         "mode": config.mode,
+        "asr_provider": config.asr_provider,
+        "faster_whisper_model": config.faster_whisper_model,
         "translation": config.translation,
+        "ollama_model": config.ollama_model if config.translation == "ollama" else None,
         "tts_engine": config.tts_engine,
+        "piper_model": config.piper_model if config.tts_engine in {"piper", "auto"} else None,
         "multi_character": config.multi_character,
         "series_id": config.series_id or key,
         "max_speakers": config.max_speakers,

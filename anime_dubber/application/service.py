@@ -70,15 +70,17 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
     if not output_dir:
         raise ValueError("output_dir is required")
 
+    asr_provider = str(asr.get("provider") or data.get("asr_provider") or "auto")
+
     translation_provider = str(
-        translation.get("provider") or data.get("translation") or "llm"
+        translation.get("provider") or data.get("translation") or "auto"
     )
     if translation_provider in {"mlx_llm", "local_llm"}:
         translation_provider = "llm"
     elif translation_provider in {"whisper_direct", "whisper_translate"}:
         translation_provider = "whisper"
 
-    tts_provider = str(tts.get("provider") or data.get("tts_engine") or "macos")
+    tts_provider = str(tts.get("provider") or data.get("tts_engine") or "auto")
     if tts_provider == "macos_say":
         tts_provider = "macos"
 
@@ -90,9 +92,17 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         source=source,
         output_dir=Path(output_dir).expanduser(),
         mode=str(data.get("mode") or "dub"),
+        asr_provider=asr_provider,
+        faster_whisper_model=str(asr.get("model", data.get("faster_whisper_model", "large-v3")) or "large-v3"),
+        faster_whisper_device=str(asr.get("device", data.get("faster_whisper_device", "auto")) or "auto"),
+        faster_whisper_compute_type=str(asr.get("compute_type", data.get("faster_whisper_compute_type", "auto")) or "auto"),
         translation=translation_provider,
+        ollama_url=str(translation.get("ollama_url", data.get("ollama_url", "http://127.0.0.1:11434")) or "http://127.0.0.1:11434"),
+        ollama_model=str(translation.get("model", data.get("ollama_model", "qwen3:4b")) or "qwen3:4b"),
         tts_engine=tts_provider,
         voice=str(tts.get("fallback_voice", data.get("voice", "")) or ""),
+        piper_model=str(tts.get("piper_model", data.get("piper_model", "")) or ""),
+        piper_speaker=int(tts.get("piper_speaker", data.get("piper_speaker", -1))),
         tts_rate=int(tts.get("rate", data.get("tts_rate", 210))),
         context=str(data.get("context") or data.get("series_context") or DEFAULT_CONTEXT),
         glossary=dict(data.get("glossary") or DEFAULT_GLOSSARY),
@@ -157,11 +167,14 @@ class ApplicationService:
                 },
             },
             "current_pipeline": {
-                "engine": "legacy_v3",
-                "processing_supported": system == "Darwin" and machine == "arm64",
+                "engine": "v4_shared",
+                "processing_supported": bool(
+                    _module_available("demucs") and (mlx_ok or faster_ok)
+                ),
                 "note": (
-                    "The current processing engine uses MLX and macOS voices. "
-                    "Faster-Whisper/Piper/Ollama execution is added in the cross-platform provider phase."
+                    "Apple silicon can use MLX Whisper/MLX LLM/macOS voices. "
+                    "Windows and Linux can use Faster-Whisper, Whisper-direct or Ollama translation, "
+                    "and Piper or ElevenLabs TTS."
                 ),
             },
         }
@@ -173,7 +186,12 @@ class ApplicationService:
             path = shutil.which(exe)
             checks.append({"name": exe, "ok": bool(path), "detail": path or "not found"})
         yt = shutil.which("yt-dlp") or shutil.which("yt_dlp")
-        checks.append({"name": "yt-dlp", "ok": bool(yt), "detail": yt or "not found"})
+        yt_module = _module_available("yt_dlp")
+        checks.append({
+            "name": "yt-dlp",
+            "ok": bool(yt or yt_module),
+            "detail": yt or ("Python module available" if yt_module else "not found"),
+        })
         checks.append({
             "name": "demucs",
             "ok": bool(caps["providers"]["stems"]["demucs"]),
@@ -195,15 +213,23 @@ class ApplicationService:
             checks.append({
                 "name": "faster-whisper",
                 "ok": bool(caps["providers"]["asr"]["faster_whisper"]),
-                "detail": "cross-platform provider" if caps["providers"]["asr"]["faster_whisper"] else "not installed yet",
+                "detail": "available" if caps["providers"]["asr"]["faster_whisper"] else "install requirements-cross-platform.txt",
             })
             checks.append({
                 "name": "Piper",
                 "ok": bool(caps["providers"]["tts"]["piper"]),
-                "detail": "cross-platform provider" if caps["providers"]["tts"]["piper"] else "not installed yet",
+                "detail": "available (voice model still required)" if caps["providers"]["tts"]["piper"] else "optional local TTS; install piper-tts or use ElevenLabs",
+                "optional": True,
+            })
+            checks.append({
+                "name": "Ollama",
+                "ok": bool(caps["providers"]["translation"]["ollama"]),
+                "detail": "available" if caps["providers"]["translation"]["ollama"] else "optional; Whisper direct translation works without it",
+                "optional": True,
             })
 
-        base_ok = all(x["ok"] for x in checks[:4])
+        required = [x for x in checks if not x.get("optional")]
+        base_ok = all(x["ok"] for x in required)
         return {"ok": base_ok, "checks": checks, "capabilities": caps}
 
     def list_voices(self) -> list[str]:
