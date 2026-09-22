@@ -43,11 +43,16 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--ollama-model", default="qwen3:4b")
         p.add_argument(
             "--tts",
-            choices=["auto", "macos", "piper", "elevenlabs"],
+            choices=["auto", "chatterbox", "kokoro", "macos", "piper", "elevenlabs"],
             default="auto",
-            help="auto uses macOS voices on macOS, Piper when a model is configured, otherwise ElevenLabs.",
+            help="auto prefers Chatterbox, then Kokoro, then platform fallbacks.",
         )
         p.add_argument("--voice", default="")
+        p.add_argument("--chatterbox-reference", default="", help="Optional voice reference clip you have permission to use")
+        p.add_argument("--chatterbox-expressiveness", type=float, default=0.5)
+        p.add_argument("--chatterbox-device", choices=["auto", "mps", "cuda", "cpu"], default="auto")
+        p.add_argument("--chatterbox-standard", action="store_true", help="Use standard Chatterbox instead of Turbo")
+        p.add_argument("--kokoro-voice", default="auto", help="Kokoro voice preset, e.g. af_heart or am_adam")
         p.add_argument("--piper-model", default="", help="Path to a Piper .onnx voice model")
         p.add_argument("--piper-speaker", type=int, default=-1, help="Optional Piper speaker id for multi-speaker models")
         p.add_argument("--rate", type=int, default=210)
@@ -96,6 +101,11 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "tts": {
             "provider": args.tts,
             "fallback_voice": args.voice,
+            "chatterbox_reference_audio": args.chatterbox_reference,
+            "chatterbox_expressiveness": args.chatterbox_expressiveness,
+            "chatterbox_device": args.chatterbox_device,
+            "chatterbox_turbo": not args.chatterbox_standard,
+            "kokoro_voice": args.kokoro_voice,
             "piper_model": args.piper_model,
             "piper_speaker": args.piper_speaker,
             "rate": args.rate,
@@ -111,6 +121,11 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "background_volume": args.background_volume,
         "dub_volume": args.dub_volume,
         "elevenlabs_api_key": args.elevenlabs_api_key,
+        "chatterbox_reference_audio": args.chatterbox_reference,
+        "chatterbox_expressiveness": args.chatterbox_expressiveness,
+        "chatterbox_device": args.chatterbox_device,
+        "chatterbox_turbo": not args.chatterbox_standard,
+        "kokoro_voice": args.kokoro_voice,
         "piper_model": args.piper_model,
         "piper_speaker": args.piper_speaker,
     }
