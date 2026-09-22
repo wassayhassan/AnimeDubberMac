@@ -1,8 +1,12 @@
-# AI Anime English Dubber v3.3
+# AI Anime English Dubber v3.5
 
 A Mac-focused pipeline for turning Chinese AI animation / manhua-drama videos into English-subtitled or English-dubbed videos while retaining the original music and sound effects.
 
-## What v3.3 includes
+## v3.5 audio restoration update
+
+v3.5 keeps all v3.4 timestamp/TTS robustness fixes and adds a hybrid soundtrack bed: the untouched original soundtrack is preserved outside dialogue, while the Demucs `no_vocals` stem is used only around detected speech with pre/post guards. It also trims TTS lead-in silence and turns aggressive background ducking off by default.
+
+## What v3.5 includes
 
 - Multi-character speaker detection / diarization.
 - Persistent character voices across episodes when the same **Series ID** is used.
@@ -70,7 +74,7 @@ Recommended settings:
 - Speaker backend: **auto**
 - Series ID: **10000-years-cultivation**
 - TTS: **macOS local/free**
-- Background ducking: **On**
+- Background ducking: **Off**
 
 Use **Analyze characters first** before rendering the full compilation. The character map is saved as `<video-key>_characters.json` and can be edited from the GUI.
 
