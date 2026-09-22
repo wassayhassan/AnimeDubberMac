@@ -173,10 +173,9 @@ class ProjectStore:
 
 def list_projects(output_dir: Path) -> list[dict]:
     root = Path(output_dir).expanduser().resolve() / ".anime_dubber_project" / "projects"
-    if not root.exists():
-        return []
     rows = []
-    for path in root.glob("*.json"):
+    manifest_paths = root.glob("*.json") if root.exists() else []
+    for path in manifest_paths:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
