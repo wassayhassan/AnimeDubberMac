@@ -11,18 +11,25 @@ from .protocol import decode_request, encode_message, response_error, response_o
 
 
 class JsonLineWriter:
-    def __init__(self):
+    def __init__(self, stream):
+        self._stream = stream
         self._lock = threading.Lock()
 
     def write(self, payload: Dict[str, Any]) -> None:
         line = encode_message(payload)
         with self._lock:
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+            self._stream.write(line + "\n")
+            self._stream.flush()
 
 
 def serve() -> int:
-    writer = JsonLineWriter()
+    # Reserve the original stdout exclusively for JSON protocol messages.
+    # Third-party ML libraries occasionally print diagnostics; send incidental
+    # Python stdout to stderr so one stray print cannot corrupt the JSONL stream.
+    protocol_stdout = sys.stdout
+    writer = JsonLineWriter(protocol_stdout)
+    sys.stdout = sys.stderr
+
     service = ApplicationService(event_sink=lambda event: writer.write(event.to_dict()))
     shutting_down = False
 
