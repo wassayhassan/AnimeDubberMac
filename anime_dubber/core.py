@@ -22,6 +22,8 @@ WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 LLM_MODEL = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 DEMUCS_MODEL = "htdemucs"
 SAMPLE_RATE = 44100
+DIALOGUE_GUARD_PRE = 0.24
+DIALOGUE_GUARD_POST = 0.16
 
 DEFAULT_CONTEXT = (
     "Chinese xianxia/xuanhuan cultivation animation. Preserve character names, sect names, realm names, "
@@ -119,7 +121,7 @@ class Config:
     chunk_seconds: int = 120
     background_volume: float = 1.0
     dub_volume: float = 1.15
-    ducking: bool = True
+    ducking: bool = False
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "JBFqnCBsd6RMkjVDRZzb"
     elevenlabs_model_id: str = "eleven_v3"
@@ -974,7 +976,13 @@ def prepare_tts_clip(
 
     source_dur = max(0.05, ffprobe_duration(source_audio, runner))
     target_dur = max(0.18, seg.end - seg.start)
-    filters: List[str] = []
+    filters: List[str] = [
+        # macOS say and some hosted TTS voices can include a short lead-in.
+        # Remove it so the English line starts at the subtitle boundary instead
+        # of exposing a faint residual source-language voice first.
+        "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB",
+        "afade=t=in:st=0:d=0.012",
+    ]
     filters.extend(_pitch_filters(pitch))
     if source_dur > target_dur * 1.02:
         factor = source_dur / target_dur
@@ -1004,6 +1012,8 @@ def prepare_tts_clip(
     except PipelineError:
         progress(f"Warning: line {index + 1} produced empty filtered audio; retrying without timing compression")
         safe_filters = [
+            "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB",
+            "afade=t=in:st=0:d=0.012",
             f"volume={max(0.1, min(3.0, gain)):.4f}",
             f"aresample={SAMPLE_RATE}",
             "aformat=sample_fmts=s16:channel_layouts=stereo",
@@ -1127,6 +1137,145 @@ def render_dub_timeline(
     return timeline
 
 
+
+def _merge_dialogue_guard_intervals(
+    segments: Sequence[Segment],
+    total_duration: float,
+    pre: float = DIALOGUE_GUARD_PRE,
+    post: float = DIALOGUE_GUARD_POST,
+) -> List[Tuple[float, float]]:
+    """Return merged regions where the dialogue-reduced stem should be used.
+
+    The pre/post guard hides Demucs vocal bleed that begins slightly before or
+    trails slightly after Whisper's speech timestamps.
+    """
+    intervals: List[Tuple[float, float]] = []
+    limit = max(0.0, float(total_duration))
+    for seg in segments:
+        if not math.isfinite(seg.start) or not math.isfinite(seg.end):
+            continue
+        if seg.end <= seg.start:
+            continue
+        start = max(0.0, float(seg.start) - max(0.0, pre))
+        end = min(limit, float(seg.end) + max(0.0, post))
+        if end > start:
+            intervals.append((start, end))
+    if not intervals:
+        return []
+    intervals.sort()
+    merged: List[List[float]] = [[intervals[0][0], intervals[0][1]]]
+    for start, end in intervals[1:]:
+        last = merged[-1]
+        if start <= last[1] + 0.04:
+            last[1] = max(last[1], end)
+        else:
+            merged.append([start, end])
+    return [(a, b) for a, b in merged]
+
+
+def build_dialogue_safe_background(
+    original: Path,
+    separated_background: Path,
+    segments: Sequence[Segment],
+    total_duration: float,
+    work_dir: Path,
+    config: Config,
+    runner: CommandRunner,
+    progress: ProgressCallback,
+) -> Path:
+    """Keep the untouched original soundtrack outside dialogue and use Demucs
+    only around spoken regions.
+
+    Demucs is a music-source separator, not a dialogue extractor. Using its
+    no_vocals stem for an entire episode can remove score/SFX it misclassifies as
+    vocal content. This hybrid bed restores the original music/SFX between lines
+    while still suppressing the source-language dialogue around speech.
+    """
+    intervals = _merge_dialogue_guard_intervals(segments, total_duration)
+    signature = hashlib.sha1(json.dumps({
+        "original": [original.name, original.stat().st_size],
+        "separated": [separated_background.name, separated_background.stat().st_size],
+        "intervals": [[round(a, 3), round(b, 3)] for a, b in intervals],
+        "chunk_seconds": int(config.chunk_seconds),
+        "guard": [DIALOGUE_GUARD_PRE, DIALOGUE_GUARD_POST],
+    }, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    out = work_dir / f"background_bed_{signature}.wav"
+    if config.resume and out.exists() and out.stat().st_size > 1000 and not config.force:
+        return out
+
+    if not intervals:
+        progress("No dialogue regions found; using original soundtrack as background…")
+        runner.run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(original), "-ac", "2", "-ar", str(SAMPLE_RATE),
+            "-c:a", "pcm_s16le", str(out),
+        ])
+        return out
+
+    progress("Restoring original music/SFX outside dialogue and suppressing source voices around speech…")
+    chunk_seconds = max(30, int(config.chunk_seconds))
+    chunk_dir = work_dir / f"background_chunks_{signature}"
+    if chunk_dir.exists() and config.force:
+        shutil.rmtree(chunk_dir)
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunks: List[Path] = []
+    count = max(1, int(math.ceil(total_duration / chunk_seconds)))
+
+    for n in range(count):
+        runner.check_cancel()
+        start = n * chunk_seconds
+        end = min(total_duration, (n + 1) * chunk_seconds)
+        dur = max(0.01, end - start)
+        chunk = chunk_dir / f"chunk_{n:05d}.wav"
+        chunks.append(chunk)
+        if config.resume and chunk.exists() and chunk.stat().st_size > 1000 and not config.force:
+            continue
+
+        local: List[Tuple[float, float]] = []
+        for a, b in intervals:
+            if a >= end:
+                break
+            if b <= start:
+                continue
+            local.append((max(0.0, a - start), min(dur, b - start)))
+
+        if not local:
+            runner.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(original),
+                "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(chunk),
+            ])
+            continue
+
+        # Chunk-local expressions keep ffmpeg command size manageable even for
+        # multi-hour episodes. Original is used outside speech; no_vocals inside.
+        terms = "+".join(f"between(t,{a:.6f},{b:.6f})" for a, b in local)
+        mask = f"gt({terms},0)"
+        filt = (
+            f"[0:a]atrim=duration={dur:.6f},asetpts=PTS-STARTPTS,"
+            f"volume='if({mask},0,1)':eval=frame[o];"
+            f"[1:a]atrim=duration={dur:.6f},asetpts=PTS-STARTPTS,"
+            f"volume='if({mask},1,0)':eval=frame[s];"
+            "[o][s]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+            "alimiter=limit=0.98[bed]"
+        )
+        runner.run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(original),
+            "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(separated_background),
+            "-filter_complex", filt, "-map", "[bed]",
+            "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(chunk),
+        ])
+
+    concat = work_dir / f"background_concat_{signature}.txt"
+    concat.write_text("".join(f"file {_ffconcat_quote(x)}\n" for x in chunks), encoding="utf-8")
+    runner.run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "concat", "-safe", "0", "-i", str(concat),
+        "-c:a", "pcm_s16le", str(out),
+    ])
+    return out
+
 def mix_background_and_dub(
     background: Path,
     dub: Path,
@@ -1152,7 +1301,7 @@ def mix_background_and_dub(
         filt = (
             f"[0:a]volume={config.background_volume:.4f}[bg];"
             f"[1:a]volume={config.dub_volume:.4f},asplit=2[dub][sc];"
-            "[bg][sc]sidechaincompress=threshold=0.025:ratio=5:attack=8:release=250[ducked];"
+            "[bg][sc]sidechaincompress=threshold=0.060:ratio=1.8:attack=18:release=180[ducked];"
             "[ducked][dub]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
             "alimiter=limit=0.95,apad[mix]"
         )
@@ -1356,7 +1505,10 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
 
     total_duration = ffprobe_duration(audio, runner)
     dub_timeline = render_dub_timeline(segments, clips, total_duration, work, config, runner, progress)
-    mixed = mix_background_and_dub(background, dub_timeline, work, config, runner, progress)
+    background_bed = build_dialogue_safe_background(
+        audio, background, zh_segments, total_duration, work, config, runner, progress
+    )
+    mixed = mix_background_and_dub(background_bed, dub_timeline, work, config, runner, progress)
     final = out / f"{key}_EN_DUB.mp4"
     mux_video(video, mixed, final, runner, progress)
     results["dubbed_video"] = final
