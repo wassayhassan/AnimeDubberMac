@@ -9,6 +9,34 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+APP_BG = "#F5F5F7"
+CARD_BG = "#FFFFFF"
+TEXT_PRIMARY = "#1D1D1F"
+TEXT_SECONDARY = "#6E6E73"
+BORDER = "#D2D2D7"
+ACCENT = "#0A84FF"
+LOG_BG = "#151517"
+LOG_FG = "#F2F2F7"
+
+
+def configure_styles(root):
+    style = ttk.Style(root)
+    if "aqua" in style.theme_names():
+        try:
+            style.theme_use("aqua")
+        except tk.TclError:
+            pass
+    style.configure("Accent.TButton", font=("Helvetica Neue", 12, "bold"), padding=(16, 9))
+    style.configure("Secondary.TButton", font=("Helvetica Neue", 11), padding=(12, 7))
+    style.configure("Danger.TButton", font=("Helvetica Neue", 11), padding=(12, 7))
+    style.configure("Section.TLabel", font=("Helvetica Neue", 13, "bold"))
+    style.configure("Field.TLabel", font=("Helvetica Neue", 11, "bold"))
+    style.configure("Hint.TLabel", font=("Helvetica Neue", 10))
+    style.configure("Status.TLabel", font=("Helvetica Neue", 11))
+    style.configure("TNotebook", tabmargins=(0, 4, 0, 0))
+    style.configure("TNotebook.Tab", padding=(14, 8), font=("Helvetica Neue", 11))
+
+
 from .core import (
     Config,
     CommandRunner,
@@ -25,8 +53,10 @@ class CharacterManager(tk.Toplevel):
         super().__init__(parent)
         self.path = path
         self.voices = list(voices)
-        self.title("Character / Voice Manager")
-        self.geometry("1040x610")
+        configure_styles(self)
+        self.configure(bg=APP_BG)
+        self.title("Character Voices")
+        self.geometry("1080x640")
         self.minsize(900, 520)
         try:
             self.data = json.loads(path.read_text(encoding="utf-8"))
@@ -141,57 +171,293 @@ class CharacterManager(tk.Toplevel):
 
 class App:
     def __init__(self, root: tk.Tk):
-        self.root=root; root.title("AI Anime English Dubber v3.5"); root.geometry("940x800"); root.minsize(820,700)
-        self.q: queue.Queue[str]=queue.Queue(); self.runner=None; self.worker=None; self.last_character_map=None
-        outer=ttk.Frame(root,padding=18); outer.pack(fill="both",expand=True)
-        ttk.Label(outer,text="AI Anime English Dubber v3.5",font=("",21,"bold")).pack(anchor="w")
-        ttk.Label(outer,text="Multi-character English dubbing with speaker-aware voices, shouting/whispering style, and preserved music/SFX.").pack(anchor="w",pady=(2,12))
-        form=ttk.Frame(outer); form.pack(fill="x")
+        self.root = root
+        configure_styles(root)
+        root.title("AnimeDubber")
+        root.geometry("1120x860")
+        root.minsize(940, 720)
+        root.configure(bg=APP_BG)
 
-        self.source=tk.StringVar(value="https://youtu.be/WH9x3hYwPj0")
-        self.output=tk.StringVar(value=str(Path.home()/"Movies"/"AnimeDubber"))
-        self.series_id=tk.StringVar(value="10000-years-cultivation")
-        self.mode=tk.StringVar(value="dub"); self.translation=tk.StringVar(value="llm"); self.tts=tk.StringVar(value="macos")
-        self.voice=tk.StringVar(value=""); self.rate=tk.IntVar(value=210); self.resume=tk.BooleanVar(value=True); self.ducking=tk.BooleanVar(value=False); self.multi=tk.BooleanVar(value=True)
-        self.bg_volume=tk.DoubleVar(value=1.0); self.dub_volume=tk.DoubleVar(value=1.15); self.max_speakers=tk.IntVar(value=12); self.speaker_threshold=tk.DoubleVar(value=0.0); self.speaker_backend=tk.StringVar(value="auto")
-        self.eleven_key=tk.StringVar(value=""); self.eleven_voice=tk.StringVar(value="JBFqnCBsd6RMkjVDRZzb")
-        self.context=tk.StringVar(value="Chinese xianxia/xuanhuan cultivation animation. Keep names, sects, realms, system terms, and cultivation terminology consistent.")
-        self.voices=list_macos_voices()
+        self.q: queue.Queue[str] = queue.Queue()
+        self.runner = None
+        self.worker = None
+        self.last_character_map = None
 
-        def row(label):
-            r=ttk.Frame(form); r.pack(fill="x",pady=4); ttk.Label(r,text=label,width=20).pack(side="left",anchor="w"); return r
-        r=row("YouTube / video"); ttk.Entry(r,textvariable=self.source).pack(side="left",fill="x",expand=True); ttk.Button(r,text="Browse…",command=self.browse_video).pack(side="left",padx=(7,0))
-        r=row("Output folder"); ttk.Entry(r,textvariable=self.output).pack(side="left",fill="x",expand=True); ttk.Button(r,text="Browse…",command=self.browse_output).pack(side="left",padx=(7,0))
-        r=row("Series ID"); ttk.Entry(r,textvariable=self.series_id).pack(side="left",fill="x",expand=True); ttk.Label(r,text="same ID = persistent character voices").pack(side="left",padx=8)
-        r=row("Output mode"); ttk.Radiobutton(r,text="English dub + SRT",value="dub",variable=self.mode).pack(side="left"); ttk.Radiobutton(r,text="Subtitles only",value="subtitles",variable=self.mode).pack(side="left",padx=14)
-        r=row("Translation"); ttk.Radiobutton(r,text="Local LLM (recommended)",value="llm",variable=self.translation).pack(side="left"); ttk.Radiobutton(r,text="Whisper direct",value="whisper",variable=self.translation).pack(side="left",padx=14)
-        r=row("Character dubbing"); ttk.Checkbutton(r,text="Detect separate characters and assign voices",variable=self.multi).pack(side="left"); ttk.Label(r,text="male/female-style · child/adult/older · lead/side · shout/whisper").pack(side="left",padx=8)
-        r=row("Speaker analysis"); ttk.Label(r,text="Backend").pack(side="left"); ttk.Combobox(r,textvariable=self.speaker_backend,values=["auto","ecapa","acoustic"],state="readonly",width=10).pack(side="left",padx=(4,10)); ttk.Label(r,text="Max").pack(side="left"); ttk.Spinbox(r,from_=2,to=30,width=6,textvariable=self.max_speakers).pack(side="left",padx=(4,12)); ttk.Label(r,text="Threshold (0=auto)").pack(side="left"); ttk.Spinbox(r,from_=0,to=.99,increment=.02,width=7,textvariable=self.speaker_threshold).pack(side="left",padx=4)
-        r=row("TTS"); ttk.Radiobutton(r,text="macOS local/free",value="macos",variable=self.tts,command=self.refresh_visibility).pack(side="left"); ttk.Radiobutton(r,text="ElevenLabs",value="elevenlabs",variable=self.tts,command=self.refresh_visibility).pack(side="left",padx=14)
+        self.source = tk.StringVar(value="https://youtu.be/WH9x3hYwPj0")
+        self.output = tk.StringVar(value=str(Path.home() / "Movies" / "AnimeDubber"))
+        self.series_id = tk.StringVar(value="10000-years-cultivation")
+        self.mode = tk.StringVar(value="dub")
+        self.translation = tk.StringVar(value="llm")
+        self.tts = tk.StringVar(value="macos")
+        self.voice = tk.StringVar(value="")
+        self.rate = tk.IntVar(value=210)
+        self.resume = tk.BooleanVar(value=True)
+        self.ducking = tk.BooleanVar(value=False)
+        self.multi = tk.BooleanVar(value=True)
+        self.bg_volume = tk.DoubleVar(value=1.0)
+        self.dub_volume = tk.DoubleVar(value=1.15)
+        self.max_speakers = tk.IntVar(value=12)
+        self.speaker_threshold = tk.DoubleVar(value=0.0)
+        self.speaker_backend = tk.StringVar(value="auto")
+        self.eleven_key = tk.StringVar(value="")
+        self.eleven_voice = tk.StringVar(value="JBFqnCBsd6RMkjVDRZzb")
+        self.context = tk.StringVar(
+            value="Chinese xianxia/xuanhuan cultivation animation. Keep names, sects, realms, system terms, and cultivation terminology consistent."
+        )
+        self.voices = list_macos_voices()
 
-        self.tts_options=ttk.Frame(form); self.tts_options.pack(fill="x",pady=4)
-        self.local_frame=ttk.Frame(self.tts_options); ttk.Label(self.local_frame,text="Fallback voice",width=20).pack(side="left"); ttk.Combobox(self.local_frame,textvariable=self.voice,values=[""]+self.voices,state="normal").pack(side="left",fill="x",expand=True); ttk.Label(self.local_frame,text="Rate").pack(side="left",padx=(10,4)); ttk.Spinbox(self.local_frame,from_=120,to=350,increment=5,width=7,textvariable=self.rate).pack(side="left")
-        self.el_frame=ttk.Frame(self.tts_options); r1=ttk.Frame(self.el_frame); r1.pack(fill="x",pady=2); ttk.Label(r1,text="ElevenLabs API key",width=20).pack(side="left"); ttk.Entry(r1,textvariable=self.eleven_key,show="•").pack(side="left",fill="x",expand=True); r2=ttk.Frame(self.el_frame); r2.pack(fill="x",pady=2); ttk.Label(r2,text="Default voice ID",width=20).pack(side="left"); ttk.Entry(r2,textvariable=self.eleven_voice).pack(side="left",fill="x",expand=True); ttk.Label(self.el_frame,text="For true multi-voice ElevenLabs dubbing, set per-character voice IDs in the character-map JSON; local macOS mode auto-assigns multiple voices.",wraplength=820).pack(anchor="w",padx=(160,0))
+        shell = tk.Frame(root, bg=APP_BG)
+        shell.pack(fill="both", expand=True, padx=24, pady=20)
 
-        r=row("Series context"); ttk.Entry(r,textvariable=self.context).pack(side="left",fill="x",expand=True)
-        r=row("Audio mix"); ttk.Checkbutton(r,text="Duck background during English dialogue",variable=self.ducking).pack(side="left"); ttk.Checkbutton(r,text="Resume cached work",variable=self.resume).pack(side="left",padx=14)
-        r=row("Volumes"); ttk.Label(r,text="Music/SFX").pack(side="left"); ttk.Spinbox(r,from_=.2,to=2,increment=.05,width=7,textvariable=self.bg_volume).pack(side="left",padx=(4,12)); ttk.Label(r,text="English voice").pack(side="left"); ttk.Spinbox(r,from_=.2,to=2,increment=.05,width=7,textvariable=self.dub_volume).pack(side="left",padx=4)
+        header = tk.Frame(shell, bg=APP_BG)
+        header.pack(fill="x", pady=(0, 14))
+        title_box = tk.Frame(header, bg=APP_BG)
+        title_box.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            title_box, text="AnimeDubber", bg=APP_BG, fg=TEXT_PRIMARY,
+            font=("Helvetica Neue", 28, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            title_box,
+            text="Local, speaker-aware English dubbing for Apple silicon.",
+            bg=APP_BG, fg=TEXT_SECONDARY, font=("Helvetica Neue", 12)
+        ).pack(anchor="w", pady=(2, 0))
+        ttk.Button(
+            header, text="System Check", style="Secondary.TButton", command=self.show_doctor
+        ).pack(side="right", anchor="n", pady=4)
 
-        buttons=ttk.Frame(outer); buttons.pack(fill="x",pady=(14,8))
-        self.start_btn=ttk.Button(buttons,text="Generate dub",command=self.start); self.start_btn.pack(side="left")
-        self.analyze_btn=ttk.Button(buttons,text="Analyze characters first",command=self.analyze); self.analyze_btn.pack(side="left",padx=7)
-        ttk.Button(buttons,text="Character manager",command=self.open_manager).pack(side="left")
-        self.stop_btn=ttk.Button(buttons,text="Stop",command=self.stop,state="disabled"); self.stop_btn.pack(side="left",padx=7)
-        ttk.Button(buttons,text="System check",command=self.show_doctor).pack(side="left")
+        project_card = tk.Frame(
+            shell, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1,
+            padx=18, pady=16
+        )
+        project_card.pack(fill="x", pady=(0, 12))
+        tk.Label(
+            project_card, text="Project", bg=CARD_BG, fg=TEXT_PRIMARY,
+            font=("Helvetica Neue", 15, "bold")
+        ).pack(anchor="w", pady=(0, 10))
 
-        self.pb=ttk.Progressbar(outer,mode="indeterminate",maximum=100); self.pb.pack(fill="x")
-        self.progress_text=tk.StringVar(value="")
-        self.status=tk.StringVar(value="Ready")
-        status_row=ttk.Frame(outer); status_row.pack(fill="x",pady=(6,4))
-        ttk.Label(status_row,textvariable=self.status).pack(side="left",anchor="w")
-        ttk.Label(status_row,textvariable=self.progress_text).pack(side="right",anchor="e")
-        self.log=tk.Text(outer,height=15,wrap="word"); self.log.pack(fill="both",expand=True)
-        self.refresh_visibility(); root.after(120,self.poll)
+        def project_row(label, variable, browse=None, hint=""):
+            row = tk.Frame(project_card, bg=CARD_BG)
+            row.pack(fill="x", pady=5)
+            left = tk.Frame(row, bg=CARD_BG, width=165)
+            left.pack(side="left", fill="y")
+            left.pack_propagate(False)
+            tk.Label(
+                left, text=label, bg=CARD_BG, fg=TEXT_PRIMARY,
+                font=("Helvetica Neue", 11, "bold")
+            ).pack(anchor="w", pady=7)
+            ttk.Entry(row, textvariable=variable).pack(side="left", fill="x", expand=True)
+            if browse:
+                ttk.Button(row, text="Choose…", style="Secondary.TButton", command=browse).pack(
+                    side="left", padx=(8, 0)
+                )
+            if hint:
+                tk.Label(
+                    row, text=hint, bg=CARD_BG, fg=TEXT_SECONDARY,
+                    font=("Helvetica Neue", 10)
+                ).pack(side="left", padx=(10, 0))
+            return row
+
+        project_row("Source", self.source, self.browse_video)
+        project_row("Output folder", self.output, self.browse_output)
+        project_row("Series ID", self.series_id, hint="Reuses character voices across episodes")
+
+        settings_card = tk.Frame(
+            shell, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1,
+            padx=14, pady=12
+        )
+        settings_card.pack(fill="x", pady=(0, 12))
+        self.notebook = ttk.Notebook(settings_card)
+        self.notebook.pack(fill="x")
+
+        project_tab = ttk.Frame(self.notebook, padding=(16, 14))
+        voice_tab = ttk.Frame(self.notebook, padding=(16, 14))
+        audio_tab = ttk.Frame(self.notebook, padding=(16, 14))
+        self.notebook.add(project_tab, text="General")
+        self.notebook.add(voice_tab, text="Voices")
+        self.notebook.add(audio_tab, text="Audio")
+
+        def setting_row(parent, label):
+            row = ttk.Frame(parent)
+            row.pack(fill="x", pady=6)
+            ttk.Label(row, text=label, style="Field.TLabel", width=19).pack(
+                side="left", anchor="w"
+            )
+            return row
+
+        r = setting_row(project_tab, "Output")
+        ttk.Radiobutton(r, text="English dub + subtitles", value="dub", variable=self.mode).pack(side="left")
+        ttk.Radiobutton(r, text="Subtitles only", value="subtitles", variable=self.mode).pack(
+            side="left", padx=(16, 0)
+        )
+
+        r = setting_row(project_tab, "Translation")
+        ttk.Radiobutton(r, text="Local LLM", value="llm", variable=self.translation).pack(side="left")
+        ttk.Radiobutton(r, text="Whisper direct", value="whisper", variable=self.translation).pack(
+            side="left", padx=(16, 0)
+        )
+        ttk.Label(r, text="Local LLM is recommended", style="Hint.TLabel").pack(side="left", padx=(12, 0))
+
+        r = setting_row(project_tab, "Characters")
+        ttk.Checkbutton(
+            r, text="Detect speakers and assign separate voices", variable=self.multi
+        ).pack(side="left")
+
+        r = setting_row(project_tab, "Speaker analysis")
+        ttk.Label(r, text="Backend").pack(side="left")
+        ttk.Combobox(
+            r, textvariable=self.speaker_backend, values=["auto", "ecapa", "acoustic"],
+            state="readonly", width=10
+        ).pack(side="left", padx=(5, 14))
+        ttk.Label(r, text="Max speakers").pack(side="left")
+        ttk.Spinbox(r, from_=2, to=30, width=6, textvariable=self.max_speakers).pack(
+            side="left", padx=(5, 14)
+        )
+        ttk.Label(r, text="Threshold").pack(side="left")
+        ttk.Spinbox(
+            r, from_=0, to=.99, increment=.02, width=7, textvariable=self.speaker_threshold
+        ).pack(side="left", padx=(5, 0))
+        ttk.Label(r, text="0 = automatic", style="Hint.TLabel").pack(side="left", padx=(8, 0))
+
+        r = setting_row(project_tab, "Series context")
+        ttk.Entry(r, textvariable=self.context).pack(side="left", fill="x", expand=True)
+
+        r = setting_row(voice_tab, "Provider")
+        ttk.Radiobutton(
+            r, text="macOS local", value="macos", variable=self.tts, command=self.refresh_visibility
+        ).pack(side="left")
+        ttk.Radiobutton(
+            r, text="ElevenLabs", value="elevenlabs", variable=self.tts, command=self.refresh_visibility
+        ).pack(side="left", padx=(16, 0))
+
+        self.tts_options = ttk.Frame(voice_tab)
+        self.tts_options.pack(fill="x", pady=(8, 0))
+
+        self.local_frame = ttk.Frame(self.tts_options)
+        local_row = setting_row(self.local_frame, "Fallback voice")
+        ttk.Combobox(
+            local_row, textvariable=self.voice, values=[""] + self.voices, state="normal"
+        ).pack(side="left", fill="x", expand=True)
+        ttk.Label(local_row, text="Rate").pack(side="left", padx=(14, 5))
+        ttk.Spinbox(
+            local_row, from_=120, to=350, increment=5, width=7, textvariable=self.rate
+        ).pack(side="left")
+
+        self.el_frame = ttk.Frame(self.tts_options)
+        r = setting_row(self.el_frame, "API key")
+        ttk.Entry(r, textvariable=self.eleven_key, show="•").pack(side="left", fill="x", expand=True)
+        r = setting_row(self.el_frame, "Default voice ID")
+        ttk.Entry(r, textvariable=self.eleven_voice).pack(side="left", fill="x", expand=True)
+        ttk.Label(
+            self.el_frame,
+            text="Per-character ElevenLabs voice IDs can still be edited in Character Voices.",
+            style="Hint.TLabel"
+        ).pack(anchor="w", padx=(150, 0), pady=(4, 0))
+
+        r = setting_row(audio_tab, "Mix")
+        ttk.Checkbutton(
+            r, text="Duck background under English dialogue", variable=self.ducking
+        ).pack(side="left")
+        ttk.Checkbutton(r, text="Resume cached work", variable=self.resume).pack(
+            side="left", padx=(18, 0)
+        )
+
+        r = setting_row(audio_tab, "Music / SFX")
+        ttk.Spinbox(
+            r, from_=.2, to=2, increment=.05, width=8, textvariable=self.bg_volume
+        ).pack(side="left")
+        ttk.Label(r, text="English voice", style="Field.TLabel").pack(side="left", padx=(24, 8))
+        ttk.Spinbox(
+            r, from_=.2, to=2, increment=.05, width=8, textvariable=self.dub_volume
+        ).pack(side="left")
+        ttk.Label(
+            audio_tab,
+            text="The original soundtrack is preserved outside dialogue regions; Demucs is used only around source speech.",
+            style="Hint.TLabel"
+        ).pack(anchor="w", pady=(8, 0))
+
+        action_row = ttk.Frame(shell)
+        action_row.pack(fill="x", pady=(0, 12))
+        self.start_btn = ttk.Button(
+            action_row, text="Generate Dub", style="Accent.TButton", command=self.start
+        )
+        self.start_btn.pack(side="left")
+        self.analyze_btn = ttk.Button(
+            action_row, text="Analyze Characters", style="Secondary.TButton", command=self.analyze
+        )
+        self.analyze_btn.pack(side="left", padx=(8, 0))
+        ttk.Button(
+            action_row, text="Character Voices", style="Secondary.TButton", command=self.open_manager
+        ).pack(side="left", padx=(8, 0))
+        self.stop_btn = ttk.Button(
+            action_row, text="Stop", style="Danger.TButton", command=self.stop, state="disabled"
+        )
+        self.stop_btn.pack(side="right")
+
+        status_card = tk.Frame(
+            shell, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1,
+            padx=16, pady=12
+        )
+        status_card.pack(fill="x", pady=(0, 12))
+        self.progress_text = tk.StringVar(value="")
+        self.status = tk.StringVar(value="Ready")
+        status_top = tk.Frame(status_card, bg=CARD_BG)
+        status_top.pack(fill="x", pady=(0, 7))
+        tk.Label(
+            status_top, textvariable=self.status, bg=CARD_BG, fg=TEXT_PRIMARY,
+            font=("Helvetica Neue", 11, "bold"), anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+        tk.Label(
+            status_top, textvariable=self.progress_text, bg=CARD_BG, fg=TEXT_SECONDARY,
+            font=("Helvetica Neue", 10), anchor="e"
+        ).pack(side="right")
+        self.pb = ttk.Progressbar(status_card, mode="indeterminate", maximum=100)
+        self.pb.pack(fill="x")
+
+        log_card = tk.Frame(
+            shell, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1,
+            padx=0, pady=0
+        )
+        log_card.pack(fill="both", expand=True)
+        log_header = tk.Frame(log_card, bg=CARD_BG)
+        log_header.pack(fill="x", padx=14, pady=(11, 8))
+        tk.Label(
+            log_header, text="Activity", bg=CARD_BG, fg=TEXT_PRIMARY,
+            font=("Helvetica Neue", 13, "bold")
+        ).pack(side="left")
+        ttk.Button(
+            log_header, text="Clear", style="Secondary.TButton", command=self.clear_log
+        ).pack(side="right")
+
+        log_body = tk.Frame(log_card, bg=LOG_BG)
+        log_body.pack(fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(log_body, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+        self.log = tk.Text(
+            log_body,
+            height=11,
+            wrap="word",
+            bg=LOG_BG,
+            fg=LOG_FG,
+            insertbackground=LOG_FG,
+            selectbackground="#3A3A3C",
+            relief="flat",
+            borderwidth=0,
+            padx=14,
+            pady=12,
+            font=("Menlo", 10),
+            spacing1=1,
+            spacing3=2,
+            yscrollcommand=scrollbar.set,
+        )
+        self.log.pack(side="left", fill="both", expand=True)
+        scrollbar.configure(command=self.log.yview)
+        self.log.tag_configure("error", foreground="#FF6961")
+        self.log.tag_configure("muted", foreground="#A1A1A6")
+        self.log.configure(state="disabled")
+
+        self.refresh_visibility()
+        root.after(120, self.poll)
 
     def browse_video(self):
         p=filedialog.askopenfilename(filetypes=[("Video files","*.mp4 *.mkv *.mov *.webm *.m4v"),("All files","*")]);
@@ -235,6 +501,21 @@ class App:
         if details: label += "  ·  " + "  ·  ".join(details)
         self.progress_text.set(label)
 
+    def clear_log(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+    def _append_log(self, message):
+        text = str(message).replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+        if not text:
+            return
+        self.log.configure(state="normal")
+        tag = "error" if text.startswith("ERROR:") else None
+        self.log.insert("end", text + "\n", tag)
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
     def poll(self):
         try:
             while True:
@@ -244,9 +525,9 @@ class App:
                     continue
                 if not msg.startswith("Downloading source video"):
                     self._set_stage_spinner()
-                self.status.set(msg)
-                self.log.insert("end",msg+"\\n")
-                self.log.see("end")
+                clean_status = str(msg).replace("\\r", "\\n").split("\\n")[-1].strip() or "Working…"
+                self.status.set(clean_status)
+                self._append_log(msg)
         except queue.Empty:
             pass
         self.root.after(120,self.poll)
