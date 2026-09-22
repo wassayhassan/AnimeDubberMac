@@ -78,17 +78,21 @@ enum TranslationProvider: String, CaseIterable, Identifiable {
 
 enum VoiceProvider: String, CaseIterable, Identifiable {
     case auto
+    case chatterbox
+    case kokoro
+    case elevenlabs
     case macos
     case piper
-    case elevenlabs
 
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .auto: "Automatic"
-        case .macos: "macOS Local"
-        case .piper: "Piper Local"
+        case .auto: "Automatic · Best Local"
+        case .chatterbox: "Chatterbox Turbo"
+        case .kokoro: "Kokoro · Fast Local"
         case .elevenlabs: "ElevenLabs"
+        case .macos: "macOS Voice"
+        case .piper: "Piper"
         }
     }
 }
@@ -236,7 +240,12 @@ struct CharacterItem: Identifiable, Hashable {
     var ageGroup: String
     let lineCount: Int
     let speakingShare: Double
+    var ttsProvider: String
     var macosVoice: String
+    var kokoroVoice: String
+    var referenceAudio: String
+    var expressiveness: Double
+    var elevenLabsVoiceID: String
     var ttsRate: Int
     var pitchSemitones: Double
     var voiceGain: Double
@@ -252,7 +261,12 @@ struct CharacterItem: Identifiable, Hashable {
         ageGroup = dictionary["age_group"] as? String ?? "adult"
         lineCount = (dictionary["line_count"] as? NSNumber)?.intValue ?? 0
         speakingShare = (dictionary["speaking_share"] as? NSNumber)?.doubleValue ?? 0
+        ttsProvider = dictionary["tts_provider"] as? String ?? "inherit"
         macosVoice = dictionary["macos_voice"] as? String ?? ""
+        kokoroVoice = dictionary["kokoro_voice"] as? String ?? "auto"
+        referenceAudio = dictionary["reference_audio"] as? String ?? ""
+        expressiveness = (dictionary["expressiveness"] as? NSNumber)?.doubleValue ?? 0.5
+        elevenLabsVoiceID = dictionary["elevenlabs_voice_id"] as? String ?? ""
         ttsRate = (dictionary["tts_rate"] as? NSNumber)?.intValue ?? 205
         pitchSemitones = (dictionary["pitch_semitones"] as? NSNumber)?.doubleValue ?? 0
         voiceGain = (dictionary["voice_gain"] as? NSNumber)?.doubleValue ?? 1
@@ -266,7 +280,12 @@ struct CharacterDraft: Equatable {
     var role = "minor"
     var voiceClass = "neutral"
     var ageGroup = "adult"
+    var ttsProvider = "inherit"
     var macosVoice = ""
+    var kokoroVoice = "auto"
+    var referenceAudio = ""
+    var expressiveness = 0.5
+    var elevenLabsVoiceID = ""
     var ttsRate = 205
     var pitchSemitones = 0.0
     var voiceGain = 1.0
@@ -279,7 +298,12 @@ struct CharacterDraft: Equatable {
         role = character.role
         voiceClass = character.voiceClass
         ageGroup = character.ageGroup
+        ttsProvider = character.ttsProvider
         macosVoice = character.macosVoice
+        kokoroVoice = character.kokoroVoice
+        referenceAudio = character.referenceAudio
+        expressiveness = character.expressiveness
+        elevenLabsVoiceID = character.elevenLabsVoiceID
         ttsRate = character.ttsRate
         pitchSemitones = character.pitchSemitones
         voiceGain = character.voiceGain
@@ -292,7 +316,12 @@ struct CharacterDraft: Equatable {
             "role": role,
             "voice_class": voiceClass,
             "age_group": ageGroup,
+            "tts_provider": ttsProvider,
             "macos_voice": macosVoice,
+            "kokoro_voice": kokoroVoice,
+            "reference_audio": referenceAudio,
+            "expressiveness": expressiveness,
+            "elevenlabs_voice_id": elevenLabsVoiceID,
             "tts_rate": ttsRate,
             "pitch_semitones": pitchSemitones,
             "voice_gain": voiceGain,
