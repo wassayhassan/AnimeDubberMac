@@ -141,10 +141,10 @@ class CharacterManager(tk.Toplevel):
 
 class App:
     def __init__(self, root: tk.Tk):
-        self.root=root; root.title("AI Anime English Dubber v3"); root.geometry("940x800"); root.minsize(820,700)
+        self.root=root; root.title("AI Anime English Dubber v3.5"); root.geometry("940x800"); root.minsize(820,700)
         self.q: queue.Queue[str]=queue.Queue(); self.runner=None; self.worker=None; self.last_character_map=None
         outer=ttk.Frame(root,padding=18); outer.pack(fill="both",expand=True)
-        ttk.Label(outer,text="AI Anime English Dubber v3",font=("",21,"bold")).pack(anchor="w")
+        ttk.Label(outer,text="AI Anime English Dubber v3.5",font=("",21,"bold")).pack(anchor="w")
         ttk.Label(outer,text="Multi-character English dubbing with speaker-aware voices, shouting/whispering style, and preserved music/SFX.").pack(anchor="w",pady=(2,12))
         form=ttk.Frame(outer); form.pack(fill="x")
 
@@ -152,7 +152,7 @@ class App:
         self.output=tk.StringVar(value=str(Path.home()/"Movies"/"AnimeDubber"))
         self.series_id=tk.StringVar(value="10000-years-cultivation")
         self.mode=tk.StringVar(value="dub"); self.translation=tk.StringVar(value="llm"); self.tts=tk.StringVar(value="macos")
-        self.voice=tk.StringVar(value=""); self.rate=tk.IntVar(value=210); self.resume=tk.BooleanVar(value=True); self.ducking=tk.BooleanVar(value=True); self.multi=tk.BooleanVar(value=True)
+        self.voice=tk.StringVar(value=""); self.rate=tk.IntVar(value=210); self.resume=tk.BooleanVar(value=True); self.ducking=tk.BooleanVar(value=False); self.multi=tk.BooleanVar(value=True)
         self.bg_volume=tk.DoubleVar(value=1.0); self.dub_volume=tk.DoubleVar(value=1.15); self.max_speakers=tk.IntVar(value=12); self.speaker_threshold=tk.DoubleVar(value=0.0); self.speaker_backend=tk.StringVar(value="auto")
         self.eleven_key=tk.StringVar(value=""); self.eleven_voice=tk.StringVar(value="JBFqnCBsd6RMkjVDRZzb")
         self.context=tk.StringVar(value="Chinese xianxia/xuanhuan cultivation animation. Keep names, sects, realms, system terms, and cultivation terminology consistent.")
