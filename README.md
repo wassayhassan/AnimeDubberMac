@@ -18,7 +18,7 @@ docs/SWIFTUI_REDESIGN_SPEC.md
 
 ## Current v4 status
 
-Phase 5 now includes:
+Phase 6 now includes:
 
 - native SwiftUI macOS frontend;
 - persistent Projects history;
@@ -33,6 +33,10 @@ Phase 5 now includes:
 - persistent macOS app preferences;
 - ElevenLabs API key stored in macOS Keychain;
 - local `.app` packaging and installation;
+- Chatterbox Turbo as the preferred high-quality local voice engine;
+- Kokoro as the fast lightweight local voice engine;
+- optional per-character voice engine, reference clip, expressiveness, and Kokoro preset overrides;
+- automatic voice priority: Chatterbox → Kokoro → platform fallback;
 - existing v3.4 timestamp/TTS reliability fixes;
 - existing v3.5 soundtrack-preservation fixes.
 
@@ -81,15 +85,45 @@ The native Settings window now controls:
 
 - ASR provider: Automatic / MLX Whisper / Faster-Whisper
 - translation: Automatic / local MLX LLM / Ollama / Whisper direct
-- TTS: Automatic / macOS / Piper / ElevenLabs
+- TTS: Automatic / Chatterbox Turbo / Kokoro / ElevenLabs / macOS / Piper
 - Faster-Whisper model, device, and compute type
 - Ollama URL and model
+- Chatterbox device, Turbo mode, expressiveness, and optional reference clip
+- Kokoro voice preset
 - Piper voice model and speaker ID
 - fallback macOS voice and speaking rate
 - default output folder / series ID
 - speaker detection and audio defaults
 
 The ElevenLabs API key is stored in **macOS Keychain**. It is not written to project manifests.
+
+## Premium local voices
+
+Install the optional premium local voice engines into AnimeDubber's existing environment:
+
+```bash
+/bin/zsh macos/install_voice_engines.sh
+```
+
+That installer adds:
+
+- **Chatterbox Turbo** for the highest-quality local English character speech and optional zero-shot voice cloning;
+- **Kokoro** for much faster lightweight local speech;
+- `espeak-ng`, which Kokoro uses for English text processing.
+
+The installer then runs the test suite and rebuilds `~/Applications/AnimeDubber.app` so the installed app contains those Python packages.
+
+When **Automatic · Best Local** is selected, AnimeDubber uses:
+
+```text
+Chatterbox Turbo
+      ↓ unavailable
+Kokoro
+      ↓ unavailable
+macOS / Piper / ElevenLabs fallback
+```
+
+Each analyzed character can override the app default in **Characters → English Voice**. Chatterbox reference audio is never extracted or assigned automatically: only a clip explicitly selected by the user is used as a cloning reference. Use reference voices you have permission to use.
 
 ## CLI
 
@@ -212,13 +246,16 @@ Apple Silicon macOS:
 
 - ASR: MLX Whisper
 - translation: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
-- TTS: macOS `say`
+- preferred local TTS: Chatterbox Turbo when installed
+- fast local TTS: Kokoro when installed
+- compatibility fallback: macOS `say`
 
 Windows / Linux:
 
 - ASR: Faster-Whisper
 - translation: Whisper direct or Ollama
-- local TTS: Piper
+- premium local TTS: Chatterbox / Kokoro when installed
+- lightweight fallback: Piper
 
 Shared:
 
