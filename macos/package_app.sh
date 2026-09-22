@@ -47,7 +47,7 @@ if [[ "$EMBED_VENV" -eq 1 && ! -x "$ROOT/.venv/bin/python" ]]; then
   exit 1
 fi
 
-VERSION="$("$ROOT/.venv/bin/python" -c 'import anime_dubber; print(anime_dubber.__version__)' 2>/dev/null || echo "4.0.0a5")"
+VERSION="$("$ROOT/.venv/bin/python" -c 'import anime_dubber; print(anime_dubber.__version__)' 2>/dev/null || echo "4.0.0a6")"
 SHORT_VERSION="${VERSION%%a*}"
 
 echo "Building SwiftUI app (release)…"
@@ -68,6 +68,7 @@ chmod +x "$MACOS/AnimeDubber"
 ditto "$ROOT/anime_dubber" "$BACKEND/anime_dubber"
 cp "$ROOT/requirements.txt" "$BACKEND/requirements.txt"
 cp "$ROOT/requirements-cross-platform.txt" "$BACKEND/requirements-cross-platform.txt"
+cp "$ROOT/requirements-premium-voices.txt" "$BACKEND/requirements-premium-voices.txt"
 cp "$ROOT/verify_source.py" "$BACKEND/verify_source.py"
 find "$BACKEND" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 find "$BACKEND" -name '*.pyc' -delete 2>/dev/null || true

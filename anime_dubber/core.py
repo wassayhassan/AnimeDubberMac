@@ -115,8 +115,14 @@ class Config:
     translation: str = "llm"  # auto|llm|ollama|whisper
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:4b"
-    tts_engine: str = "macos"  # auto|macos|piper|elevenlabs
+    tts_engine: str = "auto"  # auto|chatterbox|kokoro|macos|piper|elevenlabs
     voice: str = ""
+    chatterbox_reference_audio: str = ""
+    chatterbox_expressiveness: float = 0.5
+    chatterbox_device: str = "auto"  # auto|mps|cuda|cpu
+    chatterbox_turbo: bool = True
+    kokoro_voice: str = "auto"
+    kokoro_language: str = "a"
     piper_model: str = ""
     piper_speaker: int = -1
     tts_rate: int = 210
@@ -1109,13 +1115,30 @@ def prepare_tts_clip(
         gain *= 0.64
 
     eleven_voice = str(profile.get("elevenlabs_voice_id", "") or config.elevenlabs_voice_id)
+    chatterbox_reference = str(
+        profile.get("reference_audio", "") or config.chatterbox_reference_audio
+    ).strip()
+    chatterbox_expressiveness = float(
+        profile.get("expressiveness", config.chatterbox_expressiveness)
+    )
+    if style == "shouting":
+        chatterbox_expressiveness = min(1.5, chatterbox_expressiveness + 0.25)
+    elif style == "whispering":
+        chatterbox_expressiveness = max(0.0, chatterbox_expressiveness - 0.15)
+    kokoro_voice = str(profile.get("kokoro_voice", "") or config.kokoro_voice).strip()
+    profile_engine = str(profile.get("tts_provider", "") or "").strip().lower()
+    resolved_tts = profile_engine if profile_engine and profile_engine != "inherit" else config.tts_engine
 
-    resolved_tts = config.tts_engine
     if resolved_tts == "auto":
-        if platform.system() == "Darwin" and shutil.which("say"):
+        from .providers.tts import chatterbox_available, kokoro_available, piper_available
+
+        if chatterbox_available():
+            resolved_tts = "chatterbox"
+        elif kokoro_available():
+            resolved_tts = "kokoro"
+        elif platform.system() == "Darwin" and shutil.which("say"):
             resolved_tts = "macos"
         else:
-            from .providers.tts import piper_available
             has_piper_model = bool(config.piper_model.strip() or os.getenv("PIPER_MODEL", "").strip())
             has_elevenlabs_key = bool(
                 config.elevenlabs_api_key.strip() or os.getenv("ELEVENLABS_API_KEY", "").strip()
@@ -1125,9 +1148,15 @@ def prepare_tts_clip(
             else:
                 resolved_tts = "elevenlabs"
 
+    if resolved_tts == "kokoro" and (not kokoro_voice or kokoro_voice == "auto"):
+        from .providers.tts import automatic_kokoro_voice
+        kokoro_voice = automatic_kokoro_voice(profile)
+
     signature_data = {
         "text": text,
-        "engine": config.tts_engine,
+        "engine": resolved_tts,
+        "configured_engine": config.tts_engine,
+        "profile_engine": profile_engine,
         "voice": chosen_voice,
         "rate": base_rate,
         "pitch": round(pitch, 3),
@@ -1138,11 +1167,17 @@ def prepare_tts_clip(
         "eleven_model": config.elevenlabs_model_id,
         "timing": [round(seg.start, 3), round(seg.end, 3)],
     }
-    # Preserve v3.5 cache signatures for macOS/ElevenLabs. Piper-specific
-    # configuration only participates when Piper is actually selected.
     if resolved_tts == "piper":
         signature_data["piper_model"] = config.piper_model or os.getenv("PIPER_MODEL", "")
         signature_data["piper_speaker"] = config.piper_speaker
+    elif resolved_tts == "chatterbox":
+        signature_data["reference_audio"] = chatterbox_reference
+        signature_data["expressiveness"] = round(chatterbox_expressiveness, 3)
+        signature_data["device"] = config.chatterbox_device
+        signature_data["turbo"] = bool(config.chatterbox_turbo)
+    elif resolved_tts == "kokoro":
+        signature_data["kokoro_voice"] = kokoro_voice
+        signature_data["kokoro_language"] = config.kokoro_language
 
     clip_signature = hashlib.sha1(
         json.dumps(signature_data, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -1152,9 +1187,37 @@ def prepare_tts_clip(
         return wav
     tts_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix = ".aiff" if resolved_tts == "macos" else (".wav" if resolved_tts == "piper" else ".mp3")
+    suffix = ".aiff" if resolved_tts == "macos" else (".mp3" if resolved_tts == "elevenlabs" else ".wav")
     source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
-    if resolved_tts == "macos":
+
+    if resolved_tts == "chatterbox":
+        from .providers.tts import synthesize_chatterbox
+        try:
+            synthesize_chatterbox(
+                text,
+                source_audio,
+                reference_audio=chatterbox_reference,
+                expressiveness=chatterbox_expressiveness,
+                device=config.chatterbox_device,
+                turbo=bool(config.chatterbox_turbo),
+                cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    elif resolved_tts == "kokoro":
+        from .providers.tts import synthesize_kokoro
+        try:
+            synthesize_kokoro(
+                text,
+                source_audio,
+                voice=kokoro_voice,
+                rate=base_rate,
+                lang_code=config.kokoro_language,
+                cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    elif resolved_tts == "macos":
         synthesize_macos(text, source_audio, config, runner, voice=chosen_voice, rate=base_rate)
     elif resolved_tts == "piper":
         from .providers.tts import synthesize_piper

@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_VERSION="4.0.0a5"
+APP_VERSION="4.0.0a6"
 echo "AnimeDubber v${APP_VERSION} — setup"
 echo "================================"
 
@@ -100,3 +100,6 @@ fi
 echo
 echo "Setup complete."
 echo "CLI: .venv/bin/python -m anime_dubber.cli --help"
+echo
+echo "For Chatterbox Turbo + Kokoro premium local voices, run:"
+echo "  /bin/zsh macos/install_voice_engines.sh"

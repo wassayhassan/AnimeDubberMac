@@ -40,7 +40,12 @@ class CharacterProfile:
     f0_median: float = 0.0
     rms_db_median: float = -90.0
     roughness: float = 0.0
+    tts_provider: str = "inherit"  # inherit|auto|chatterbox|kokoro|macos|piper|elevenlabs
     macos_voice: str = ""
+    kokoro_voice: str = "auto"
+    reference_audio: str = ""
+    expressiveness: float = 0.5
+    elevenlabs_voice_id: str = ""
     tts_rate: int = 205
     pitch_semitones: float = 0.0
     voice_gain: float = 1.0
@@ -702,7 +707,12 @@ EDITABLE_CHARACTER_FIELDS = {
     "role",
     "voice_class",
     "age_group",
+    "tts_provider",
     "macos_voice",
+    "kokoro_voice",
+    "reference_audio",
+    "expressiveness",
+    "elevenlabs_voice_id",
     "tts_rate",
     "pitch_semitones",
     "voice_gain",
@@ -765,6 +775,8 @@ def update_character_override(path: Path, character_id: str, updates: dict) -> d
             value = max(80, min(450, int(value)))
         elif key in {"pitch_semitones", "voice_gain"}:
             value = float(value)
+        elif key == "expressiveness":
+            value = max(0.0, min(1.5, float(value)))
         else:
             value = str(value)
         target[key] = value

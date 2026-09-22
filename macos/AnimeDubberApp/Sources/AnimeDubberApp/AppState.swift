@@ -21,9 +21,14 @@ final class AppState: ObservableObject {
     @Published var ollamaURL = "http://127.0.0.1:11434"
     @Published var ollamaModel = "qwen3:4b"
 
-    @Published var voiceProvider: VoiceProvider = .macos
+    @Published var voiceProvider: VoiceProvider = .auto
     @Published var fallbackVoice = ""
     @Published var ttsRate = 210
+    @Published var chatterboxReferenceAudio = ""
+    @Published var chatterboxExpressiveness = 0.5
+    @Published var chatterboxDevice = "auto"
+    @Published var chatterboxTurbo = true
+    @Published var kokoroVoice = "auto"
     @Published var piperModel = ""
     @Published var piperSpeaker = -1
     @Published var elevenLabsVoiceID = "JBFqnCBsd6RMkjVDRZzb"
@@ -93,6 +98,11 @@ final class AppState: ObservableObject {
             voiceProvider: voiceProvider,
             fallbackVoice: fallbackVoice,
             ttsRate: ttsRate,
+            chatterboxReferenceAudio: chatterboxReferenceAudio,
+            chatterboxExpressiveness: chatterboxExpressiveness,
+            chatterboxDevice: chatterboxDevice,
+            chatterboxTurbo: chatterboxTurbo,
+            kokoroVoice: kokoroVoice,
             piperModel: piperModel,
             piperSpeaker: piperSpeaker,
             elevenLabsVoiceID: elevenLabsVoiceID,
@@ -123,6 +133,11 @@ final class AppState: ObservableObject {
             voiceProvider: voiceProvider.rawValue,
             fallbackVoice: fallbackVoice,
             ttsRate: ttsRate,
+            chatterboxReferenceAudio: chatterboxReferenceAudio,
+            chatterboxExpressiveness: chatterboxExpressiveness,
+            chatterboxDevice: chatterboxDevice,
+            chatterboxTurbo: chatterboxTurbo,
+            kokoroVoice: kokoroVoice,
             piperModel: piperModel,
             piperSpeaker: piperSpeaker,
             elevenLabsVoiceID: elevenLabsVoiceID,
@@ -166,9 +181,14 @@ final class AppState: ObservableObject {
         translationProvider = TranslationProvider(rawValue: preferences.translationProvider) ?? .llm
         ollamaURL = preferences.ollamaURL
         ollamaModel = preferences.ollamaModel
-        voiceProvider = VoiceProvider(rawValue: preferences.voiceProvider) ?? .macos
+        voiceProvider = VoiceProvider(rawValue: preferences.voiceProvider) ?? .auto
         fallbackVoice = preferences.fallbackVoice
         ttsRate = preferences.ttsRate
+        chatterboxReferenceAudio = preferences.chatterboxReferenceAudio
+        chatterboxExpressiveness = preferences.chatterboxExpressiveness
+        chatterboxDevice = preferences.chatterboxDevice
+        chatterboxTurbo = preferences.chatterboxTurbo
+        kokoroVoice = preferences.kokoroVoice
         piperModel = preferences.piperModel
         piperSpeaker = preferences.piperSpeaker
         elevenLabsVoiceID = preferences.elevenLabsVoiceID
@@ -256,6 +276,11 @@ final class AppState: ObservableObject {
                 "provider": voiceProvider.rawValue,
                 "fallback_voice": fallbackVoice,
                 "rate": ttsRate,
+                "chatterbox_reference_audio": chatterboxReferenceAudio,
+                "chatterbox_expressiveness": chatterboxExpressiveness,
+                "chatterbox_device": chatterboxDevice,
+                "chatterbox_turbo": chatterboxTurbo,
+                "kokoro_voice": kokoroVoice,
                 "piper_model": piperModel,
                 "piper_speaker": piperSpeaker,
                 "api_key": elevenLabsAPIKey,
@@ -396,13 +421,36 @@ final class AppState: ObservableObject {
         let text = characterDraft.displayName.isEmpty
             ? "This is the selected character speaking in English."
             : "This is \(characterDraft.displayName) speaking in English."
+
+        let inheritedProvider = characterDraft.ttsProvider == "inherit"
+            ? voiceProvider.rawValue
+            : characterDraft.ttsProvider
+        let reference = characterDraft.referenceAudio.isEmpty
+            ? chatterboxReferenceAudio
+            : characterDraft.referenceAudio
+        let selectedKokoro = characterDraft.kokoroVoice.isEmpty
+            ? kokoroVoice
+            : characterDraft.kokoroVoice
+
         do {
             _ = try backend.send(
                 method: "preview_voice",
                 params: [
+                    "provider": inheritedProvider,
                     "voice": characterDraft.macosVoice,
                     "text": text,
                     "rate": characterDraft.ttsRate,
+                    "reference_audio": reference,
+                    "expressiveness": characterDraft.expressiveness,
+                    "device": chatterboxDevice,
+                    "turbo": chatterboxTurbo,
+                    "kokoro_voice": selectedKokoro,
+                    "voice_class": characterDraft.voiceClass,
+                    "age_group": characterDraft.ageGroup,
+                    "piper_model": piperModel,
+                    "piper_speaker": piperSpeaker,
+                    "api_key": elevenLabsAPIKey,
+                    "voice_id": characterDraft.elevenLabsVoiceID.isEmpty ? elevenLabsVoiceID : characterDraft.elevenLabsVoiceID,
                 ],
                 id: "preview-\(UUID().uuidString)"
             )
@@ -446,6 +494,31 @@ final class AppState: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url {
             piperModel = url.path
             savePreferences()
+        }
+    }
+
+    func chooseChatterboxReference() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Voice Reference Clip"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.audio]
+        if panel.runModal() == .OK, let url = panel.url {
+            chatterboxReferenceAudio = url.path
+            savePreferences()
+        }
+    }
+
+    func chooseCharacterReference() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Character Voice Reference Clip"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.audio]
+        if panel.runModal() == .OK, let url = panel.url {
+            characterDraft.referenceAudio = url.path
         }
     }
 

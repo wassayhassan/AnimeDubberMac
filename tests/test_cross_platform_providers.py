@@ -11,7 +11,7 @@ from anime_dubber.cli import build_parser
 from anime_dubber.core import CommandRunner, Config, transcribe_audio
 from anime_dubber.providers.asr import resolve_asr_provider
 from anime_dubber.providers.translation import ollama_generate
-from anime_dubber.providers.tts import synthesize_piper
+from anime_dubber.providers.tts import automatic_kokoro_voice, synthesize_piper
 
 
 class CrossPlatformProviderTests(unittest.TestCase):
@@ -44,6 +44,36 @@ class CrossPlatformProviderTests(unittest.TestCase):
         self.assertEqual(cfg.tts_engine, "piper")
         self.assertEqual(cfg.piper_speaker, 2)
 
+    def test_premium_voice_config(self):
+        cfg = config_from_dict({
+            "source": "input.mp4",
+            "output_dir": "./out",
+            "tts": {
+                "provider": "chatterbox",
+                "chatterbox_reference_audio": "./ref.wav",
+                "chatterbox_expressiveness": 0.8,
+                "chatterbox_device": "mps",
+                "chatterbox_turbo": True,
+                "kokoro_voice": "af_bella",
+            },
+        })
+        self.assertEqual(cfg.tts_engine, "chatterbox")
+        self.assertEqual(cfg.chatterbox_reference_audio, "./ref.wav")
+        self.assertAlmostEqual(cfg.chatterbox_expressiveness, 0.8)
+        self.assertEqual(cfg.chatterbox_device, "mps")
+        self.assertTrue(cfg.chatterbox_turbo)
+        self.assertEqual(cfg.kokoro_voice, "af_bella")
+
+    def test_automatic_kokoro_character_voice(self):
+        self.assertEqual(
+            automatic_kokoro_voice({"voice_class": "female", "age_group": "adult"}),
+            "af_bella",
+        )
+        self.assertEqual(
+            automatic_kokoro_voice({"voice_class": "male", "age_group": "older"}),
+            "am_michael",
+        )
+
     def test_cli_cross_platform_flags(self):
         args = build_parser().parse_args([
             "run", "input.mp4",
@@ -58,6 +88,26 @@ class CrossPlatformProviderTests(unittest.TestCase):
         self.assertEqual(args.translation, "ollama")
         self.assertEqual(args.tts, "piper")
         self.assertEqual(args.piper_model, "voice.onnx")
+
+        premium = build_parser().parse_args([
+            "run", "input.mp4",
+            "--tts", "chatterbox",
+            "--chatterbox-reference", "hero.wav",
+            "--chatterbox-expressiveness", "0.7",
+            "--chatterbox-device", "mps",
+        ])
+        self.assertEqual(premium.tts, "chatterbox")
+        self.assertEqual(premium.chatterbox_reference, "hero.wav")
+        self.assertAlmostEqual(premium.chatterbox_expressiveness, 0.7)
+        self.assertEqual(premium.chatterbox_device, "mps")
+
+        kokoro = build_parser().parse_args([
+            "run", "input.mp4",
+            "--tts", "kokoro",
+            "--kokoro-voice", "am_adam",
+        ])
+        self.assertEqual(kokoro.tts, "kokoro")
+        self.assertEqual(kokoro.kokoro_voice, "am_adam")
 
     def test_explicit_asr_aliases(self):
         self.assertEqual(resolve_asr_provider("faster-whisper"), "faster_whisper")

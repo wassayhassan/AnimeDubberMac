@@ -91,11 +91,7 @@ def serve() -> int:
                     dict(params.get("updates") or {}),
                 )
             elif method == "preview_voice":
-                result = service.preview_voice(
-                    str(params.get("voice") or ""),
-                    str(params.get("text") or ""),
-                    int(params.get("rate") or 205),
-                )
+                result = service.preview_voice(dict(params or {}))
             elif method == "shutdown":
                 result = {"shutting_down": True}
                 shutting_down = True
