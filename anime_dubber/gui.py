@@ -545,7 +545,7 @@ class App:
     def _begin(self):
         self.start_btn.config(state="disabled"); self.analyze_btn.config(state="disabled"); self.stop_btn.config(state="normal")
         self.pb.configure(mode="indeterminate",maximum=100); self.pb["value"]=0; self.pb.start(10)
-        self.progress_text.set(""); self.log.delete("1.0","end")
+        self.progress_text.set(""); self.clear_log()
     def _end(self):
         self.pb.stop(); self.pb.configure(mode="determinate",maximum=100); self.pb["value"]=0
         self.progress_text.set("")
