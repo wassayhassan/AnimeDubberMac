@@ -1,0 +1,16 @@
+name: SwiftUI shell build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-swiftui:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build SwiftUI app package
+        run: swift build --package-path macos/AnimeDubberApp
