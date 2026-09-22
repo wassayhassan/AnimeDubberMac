@@ -1,14 +1,17 @@
 import Foundation
 
 enum BackendProcessError: LocalizedError {
-    case repositoryNotFound
+    case backendNotFound
+    case runtimeNotFound(String)
     case processNotRunning
     case invalidRequest
 
     var errorDescription: String? {
         switch self {
-        case .repositoryNotFound:
-            "Could not locate the AnimeDubber repository. Set ANIMEDUBBER_REPO_ROOT while developing."
+        case .backendNotFound:
+            "Could not locate the AnimeDubber Python backend."
+        case .runtimeNotFound(let detail):
+            "Could not locate a Python runtime for AnimeDubber. \(detail)"
         case .processNotRunning:
             "The Python backend is not running."
         case .invalidRequest:
@@ -40,25 +43,26 @@ final class BackendProcess {
         self.onDiagnostic = onDiagnostic
         self.onTermination = onTermination
 
-        guard let repoRoot = locateRepositoryRoot() else {
-            throw BackendProcessError.repositoryNotFound
+        guard let backendRoot = locateBackendRoot() else {
+            throw BackendProcessError.backendNotFound
         }
+
+        let python = try locatePython(for: backendRoot)
 
         let process = Process()
         let input = Pipe()
         let output = Pipe()
         let error = Pipe()
 
-        let venvPython = repoRoot.appendingPathComponent(".venv/bin/python")
-        if FileManager.default.isExecutableFile(atPath: venvPython.path) {
-            process.executableURL = venvPython
-            process.arguments = ["-m", "anime_dubber.transport.stdio_server"]
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["python3", "-m", "anime_dubber.transport.stdio_server"]
-        }
+        process.executableURL = python.url
+        process.arguments = python.arguments + ["-m", "anime_dubber.transport.stdio_server"]
+        process.currentDirectoryURL = backendRoot
 
-        process.currentDirectoryURL = repoRoot
+        var environment = ProcessInfo.processInfo.environment
+        environment["PYTHONUNBUFFERED"] = "1"
+        environment["PYTHONPATH"] = backendRoot.path
+        process.environment = environment
+
         process.standardInput = input
         process.standardOutput = output
         process.standardError = error
@@ -138,18 +142,29 @@ final class BackendProcess {
         }
     }
 
-    private func locateRepositoryRoot() -> URL? {
+    private func locateBackendRoot() -> URL? {
+        let fileManager = FileManager.default
         let env = ProcessInfo.processInfo.environment
+
         if let explicit = env["ANIMEDUBBER_REPO_ROOT"], !explicit.isEmpty {
             let url = URL(fileURLWithPath: explicit, isDirectory: true)
-            if FileManager.default.fileExists(atPath: url.appendingPathComponent("anime_dubber").path) {
-                return url
-            }
+            if isBackendRoot(url) { return url }
         }
 
-        var candidate = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        for _ in 0..<8 {
-            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent("anime_dubber").path) {
+        if let resourceURL = Bundle.main.resourceURL {
+            let bundled = resourceURL.appendingPathComponent("backend", isDirectory: true)
+            if isBackendRoot(bundled) { return bundled }
+        }
+
+        if let saved = UserDefaults.standard.string(forKey: "AnimeDubberBackendRoot"), !saved.isEmpty {
+            let url = URL(fileURLWithPath: saved, isDirectory: true)
+            if isBackendRoot(url) { return url }
+        }
+
+        var candidate = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+        for _ in 0..<10 {
+            if isBackendRoot(candidate) {
+                UserDefaults.standard.set(candidate.path, forKey: "AnimeDubberBackendRoot")
                 return candidate
             }
             let parent = candidate.deletingLastPathComponent()
@@ -158,5 +173,58 @@ final class BackendProcess {
         }
 
         return nil
+    }
+
+    private func isBackendRoot(_ url: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("anime_dubber/__init__.py").path
+        )
+    }
+
+    private struct PythonLaunch {
+        let url: URL
+        let arguments: [String]
+    }
+
+    private func locatePython(for backendRoot: URL) throws -> PythonLaunch {
+        let fileManager = FileManager.default
+        let embeddedCandidates = [
+            backendRoot.appendingPathComponent(".venv/bin/python"),
+            backendRoot.appendingPathComponent(".venv/bin/python3"),
+        ]
+        for candidate in embeddedCandidates where fileManager.isExecutableFile(atPath: candidate.path) {
+            return PythonLaunch(url: candidate, arguments: [])
+        }
+
+        if let resources = Bundle.main.resourceURL {
+            let futureRuntime = resources.appendingPathComponent("python/bin/python3")
+            if fileManager.isExecutableFile(atPath: futureRuntime.path) {
+                return PythonLaunch(url: futureRuntime, arguments: [])
+            }
+        }
+
+        let bundleBackend = Bundle.main.resourceURL?
+            .appendingPathComponent("backend", isDirectory: true)
+            .standardizedFileURL
+        if bundleBackend?.path == backendRoot.standardizedFileURL.path {
+            throw BackendProcessError.runtimeNotFound(
+                "This app bundle was built without the embedded backend environment. Rebuild it with macos/package_app.sh after running setup.sh."
+            )
+        }
+
+        let candidates = [
+            "/opt/homebrew/bin/python3.11",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3",
+        ]
+        for path in candidates where fileManager.isExecutableFile(atPath: path) {
+            return PythonLaunch(url: URL(fileURLWithPath: path), arguments: [])
+        }
+
+        return PythonLaunch(
+            url: URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: ["python3"]
+        )
     }
 }
