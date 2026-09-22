@@ -42,3 +42,32 @@ struct AppPreferences: Codable, Equatable {
         UserDefaults.standard.set(data, forKey: Self.defaultsKey)
     }
 }
+
+
+struct SettingsSnapshot: Equatable {
+    let outputFolder: String
+    let seriesID: String
+    let outputMode: OutputMode
+    let asrProvider: ASRProvider
+    let fasterWhisperModel: String
+    let fasterWhisperDevice: String
+    let fasterWhisperComputeType: String
+    let translationProvider: TranslationProvider
+    let ollamaURL: String
+    let ollamaModel: String
+    let voiceProvider: VoiceProvider
+    let fallbackVoice: String
+    let ttsRate: Int
+    let piperModel: String
+    let piperSpeaker: Int
+    let elevenLabsVoiceID: String
+    let detectCharacters: Bool
+    let resumeCachedWork: Bool
+    let speakerBackend: String
+    let maxSpeakers: Int
+    let speakerThreshold: Double
+    let seriesContext: String
+    let backgroundVolume: Double
+    let dubVolume: Double
+    let backgroundDucking: Bool
+}
