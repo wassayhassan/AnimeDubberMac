@@ -4,12 +4,20 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
 
 def piper_executable() -> Optional[str]:
-    return shutil.which("piper")
+    found = shutil.which("piper")
+    if found:
+        return found
+    # When callers run .venv/bin/python directly without activating the venv,
+    # its scripts directory is not necessarily on PATH.
+    name = "piper.exe" if os.name == "nt" else "piper"
+    sibling = Path(sys.executable).resolve().parent / name
+    return str(sibling) if sibling.exists() else None
 
 
 def piper_available() -> bool:
