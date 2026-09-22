@@ -9,7 +9,7 @@ import threading
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ..core import (
     CancelledError,
