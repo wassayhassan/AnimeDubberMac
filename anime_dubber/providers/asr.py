@@ -62,7 +62,7 @@ def faster_whisper_segments(
         language=language,
         task=task,
         initial_prompt=initial_prompt,
-        word_timestamps=False,
+        word_timestamps=True,
         vad_filter=True,
     )
 
@@ -73,9 +73,17 @@ def faster_whisper_segments(
         text = str(getattr(seg, "text", "") or "").strip()
         if not text:
             continue
+        words = []
+        for word in getattr(seg, "words", None) or []:
+            words.append({
+                "start": float(getattr(word, "start", 0.0) or 0.0),
+                "end": float(getattr(word, "end", 0.0) or 0.0),
+                "word": str(getattr(word, "word", "") or ""),
+            })
         rows.append({
             "start": float(getattr(seg, "start", 0.0) or 0.0),
             "end": float(getattr(seg, "end", 0.0) or 0.0),
             "text": text,
+            "words": words,
         })
     return rows
