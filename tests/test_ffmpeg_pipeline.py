@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import wave
 from unittest.mock import patch
 from pathlib import Path
 
@@ -75,6 +76,43 @@ class FfmpegPipelineTests(unittest.TestCase):
     def test_ffconcat_quote_handles_apostrophe(self):
         quoted = _ffconcat_quote(Path("/tmp/O'Brien/chunk.wav"))
         self.assertEqual(quoted, "'/tmp/O'\\''Brien/chunk.wav'")
+
+    def test_timeline_places_voice_at_segment_start_with_ms_precision(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            clip = d / "sync_clip.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=1000:duration=0.20",
+                "-ac", "2", "-ar", "44100", str(clip),
+            ], check=True)
+
+            seg = Segment(1.234, 1.434, "a", "A")
+            cfg = Config(source="x", output_dir=d, chunk_seconds=30, force=True)
+            runner = CommandRunner()
+            timeline = render_dub_timeline([seg], [clip], 2.0, d, cfg, runner, lambda _m: None)
+
+            with wave.open(str(timeline), "rb") as wav:
+                rate = wav.getframerate()
+                channels = wav.getnchannels()
+                width = wav.getsampwidth()
+                self.assertEqual(width, 2)
+                frames = wav.readframes(wav.getnframes())
+
+            import array
+            samples = array.array("h")
+            samples.frombytes(frames)
+            first_frame = None
+            threshold = 100
+            for frame_index in range(len(samples) // channels):
+                base = frame_index * channels
+                if any(abs(samples[base + ch]) > threshold for ch in range(channels)):
+                    first_frame = frame_index
+                    break
+
+            self.assertIsNotNone(first_frame)
+            onset = first_frame / rate
+            self.assertLessEqual(abs(onset - 1.234), 0.012)
 
     def test_timeline_works_in_apostrophe_path(self):
         with tempfile.TemporaryDirectory(prefix="anime_dubber_O'Brien_") as td:
