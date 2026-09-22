@@ -6,6 +6,8 @@ struct DubDetailsView: View {
     let dubID: String
     @State private var player: AVPlayer?
     @State private var confirmDelete = false
+    @State private var advancedExpanded = false
+    @State private var voiceAssignments: [String] = []
 
     private var dub: DubSummary? { state.currentProject?.dubs.first { $0.id == dubID } }
 
@@ -51,6 +53,14 @@ struct DubDetailsView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                             if let path = dub.artifacts["character_map"] {
                                 ArtifactLink(title: "Character voice assignments", path: path)
+                                ForEach(voiceAssignments, id: \.self) { assignment in
+                                    Label(assignment, systemImage: "person.wave.2")
+                                        .font(.caption)
+                                }
+                                Button("Edit Current Character Voices") {
+                                    state.loadCharacterMap(path)
+                                    state.selection = .characters
+                                }
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -67,16 +77,18 @@ struct DubDetailsView: View {
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    GroupBox("Generation settings") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(dub.config.keys.sorted(), id: \.self) { key in
-                                if !["source", "output_dir", "elevenlabs_api_key"].contains(key) {
-                                    LabeledContent(key.replacingOccurrences(of: "_", with: " ").capitalized,
-                                                   value: String(describing: dub.config[key] ?? "—"))
-                                        .font(.caption)
+                    GroupBox {
+                        DisclosureGroup("Full generation settings", isExpanded: $advancedExpanded) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(dub.config.keys.sorted(), id: \.self) { key in
+                                    if !["source", "output_dir", "elevenlabs_api_key"].contains(key) {
+                                        LabeledContent(key.replacingOccurrences(of: "_", with: " ").capitalized,
+                                                       value: String(describing: dub.config[key] ?? "—"))
+                                            .font(.caption)
+                                    }
                                 }
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.padding(.top, 10).frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                     if !dub.warnings.isEmpty || dub.error != nil {
                         GroupBox("Warnings and errors") {
@@ -110,6 +122,12 @@ struct DubDetailsView: View {
                 }
                 .onAppear { loadPlayer(dub) }
                 .onChange(of: dubID) { _, _ in loadPlayer(dub) }
+                .onChange(of: dub.artifacts["dubbed_video"]) { _, _ in
+                    if let updated = self.dub { loadPlayer(updated) }
+                }
+                .onChange(of: dub.artifacts["character_map"]) { _, _ in
+                    if let updated = self.dub { loadVoiceAssignments(updated) }
+                }
                 .onDisappear { player?.pause() }
             } else {
                 ContentUnavailableView("Dub Not Found", systemImage: "waveform", description: Text("Select a dub in the sidebar."))
@@ -119,11 +137,26 @@ struct DubDetailsView: View {
     }
 
     private func loadPlayer(_ dub: DubSummary) {
+        loadVoiceAssignments(dub)
         guard let path = dub.artifacts["dubbed_video"], FileManager.default.fileExists(atPath: path) else {
             player = nil
             return
         }
         player = AVPlayer(url: URL(fileURLWithPath: path))
+    }
+
+    private func loadVoiceAssignments(_ dub: DubSummary) {
+        voiceAssignments = []
+        guard let path = dub.artifacts["character_map"],
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let map = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let characters = map["characters"] as? [[String: Any]] else { return }
+        voiceAssignments = characters.map { item in
+            let name = item["display_name"] as? String ?? item["id"] as? String ?? "Character"
+            let provider = item["tts_provider"] as? String ?? "inherit"
+            let voice = item["elevenlabs_voice_id"] as? String ?? item["kokoro_voice"] as? String ?? item["macos_voice"] as? String ?? ""
+            return "\(name) · \(provider)\(voice.isEmpty ? "" : " · \(voice)")"
+        }
     }
 
     private func value(_ config: [String: Any], _ key: String) -> String {

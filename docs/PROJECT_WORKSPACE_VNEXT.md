@@ -12,6 +12,7 @@
 | Activity was the main way to find files | Logs are useful for diagnosis but poor primary navigation | Files appear under Media, Subtitles and Dub Details; Activity remains available for diagnostics. |
 
 The app uses SF Symbols consistently for the workspace navigation, file operations, processing, status and playback. System symbols inherit the macOS accent and adapt to light/dark appearance and display density.
+The custom film-and-waveform app mark lives in `macos/assets/` as editable SVG plus a generated 1024px PNG. The macOS packager builds an `.icns` from the PNG and embeds it in the app bundle.
 
 ## Data and output structure
 

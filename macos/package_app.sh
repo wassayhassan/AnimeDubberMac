@@ -61,9 +61,20 @@ fi
 
 echo "Assembling $APP…"
 rm -rf "$APP"
-mkdir -p "$MACOS" "$BACKEND"
+mkdir -p "$MACOS" "$BACKEND" "$RESOURCES"
 cp "$BIN" "$MACOS/AnimeDubber"
 chmod +x "$MACOS/AnimeDubber"
+
+ICON_SOURCE="$ROOT/macos/assets/AnimeDubberIcon.png"
+ICONSET="$DIST/AnimeDubber.iconset"
+mkdir -p "$ICONSET"
+for icon_size in 16 32 128 256 512; do
+  sips -z "$icon_size" "$icon_size" "$ICON_SOURCE" --out "$ICONSET/icon_${icon_size}x${icon_size}.png" >/dev/null
+  double_size=$((icon_size * 2))
+  sips -z "$double_size" "$double_size" "$ICON_SOURCE" --out "$ICONSET/icon_${icon_size}x${icon_size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$RESOURCES/AnimeDubber.icns"
+rm -rf "$ICONSET"
 
 ditto "$ROOT/anime_dubber" "$BACKEND/anime_dubber"
 cp "$ROOT/requirements.txt" "$BACKEND/requirements.txt"
@@ -93,6 +104,8 @@ cat > "$CONTENTS/Info.plist" <<EOF
   <string>AnimeDubber</string>
   <key>CFBundleName</key>
   <string>AnimeDubber</string>
+  <key>CFBundleIconFile</key>
+  <string>AnimeDubber.icns</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
