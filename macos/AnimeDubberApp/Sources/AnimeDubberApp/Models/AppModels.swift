@@ -133,7 +133,7 @@ struct SystemCheckItem: Identifiable {
 }
 
 
-struct ProjectSummary: Identifiable, Hashable {
+struct ProjectSummary: Identifiable {
     let id: String
     let source: String
     let seriesID: String
