@@ -12,7 +12,7 @@ docs/SWIFTUI_REDESIGN_SPEC.md
 
 ## Current v4 alpha status
 
-Phase 3 is underway and now includes:
+Phase 4 is underway and now includes:
 
 - a shared Python `ApplicationService` used as the boundary for future SwiftUI and CLI callers;
 - structured jobs and structured progress/events;
@@ -25,6 +25,11 @@ Phase 3 is underway and now includes:
 - persistent manual character overrides synchronized back to the series voice database;
 - cancellation and job snapshots;
 - provider/capability detection;
+- Faster-Whisper ASR for Windows/Linux and optional non-MLX use;
+- Whisper-direct English translation through Faster-Whisper;
+- optional local Ollama translation;
+- local Piper TTS with configurable voice models;
+- automatic CUDA Demucs fallback on supported Windows/Linux NVIDIA systems;
 - tests for the service, protocol, and CLI;
 - all existing v3.4 timestamp/TTS reliability fixes;
 - all existing v3.5 soundtrack restoration fixes.
@@ -44,9 +49,65 @@ python -m anime_dubber.cli analyze VIDEO --series-id my-series
 python -m anime_dubber.cli run VIDEO --output ./output --series-id my-series
 ```
 
-On Apple-silicon macOS, the existing MLX/macOS processing engine remains available.
+On Apple-silicon macOS, MLX Whisper + the MLX local LLM + macOS voices remain the preferred defaults.
 
-The CLI/application-service boundary itself is cross-platform. Windows/Linux processing providers such as Faster-Whisper and Piper are the next provider phase; the current legacy processing engine underneath the service is still macOS/MLX-specific. `doctor` and `capabilities` already expose this distinction instead of pretending unsupported providers are available.
+On Windows/Linux, AnimeDubber can now run the same pipeline with Faster-Whisper for ASR, Whisper-direct or Ollama translation, Demucs, and Piper or ElevenLabs TTS. Provider selection is explicit but `auto` chooses sensible platform defaults.
+
+Example local Windows/Linux dub:
+
+```bash
+python -m anime_dubber.cli run VIDEO \
+  --output ./output \
+  --asr faster-whisper \
+  --translation whisper \
+  --tts piper \
+  --piper-model /path/to/en_US-voice.onnx
+```
+
+Example using Ollama for translation:
+
+```bash
+python -m anime_dubber.cli run VIDEO \
+  --output ./output \
+  --asr faster-whisper \
+  --translation ollama \
+  --ollama-model qwen3:4b \
+  --tts piper \
+  --piper-model /path/to/en_US-voice.onnx
+```
+
+
+## Windows / Linux setup
+
+FFmpeg and ffprobe must be installed on your system PATH.
+
+Linux:
+
+```bash
+bash setup-cross-platform.sh
+```
+
+Windows PowerShell:
+
+```powershell
+.\setup-cross-platform.ps1
+```
+
+Equivalent manual setup:
+
+```bash
+python -m venv .venv
+python -m pip install -r requirements-cross-platform.txt
+```
+
+Then verify providers:
+
+```bash
+python -m anime_dubber.cli doctor
+python -m anime_dubber.cli capabilities
+```
+
+For Piper, download a compatible English `.onnx` voice model and provide it with `--piper-model`, or set `PIPER_MODEL`. Ollama is optional and is only required when `--translation ollama` is selected. ElevenLabs remains available as an alternative TTS provider.
 
 ## SwiftUI backend protocol
 
@@ -67,7 +128,7 @@ Example request:
 Example response:
 
 ```json
-{"type":"response","id":"42","ok":true,"result":{"backend":"AnimeDubber","version":"4.0.0a2","protocol_version":1}}
+{"type":"response","id":"42","ok":true,"result":{"backend":"AnimeDubber","version":"4.0.0a4","protocol_version":1}}
 ```
 
 Long-running jobs send asynchronous event messages for stages, progress, logs, warnings, artifacts, errors, and completion.
@@ -150,12 +211,22 @@ Existing caches are intentionally preserved through the v4 migration where compa
 
 ## Current models / software
 
+macOS Apple silicon:
+
 - MLX Whisper: `mlx-community/whisper-large-v3-turbo`
 - Local translator: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
+- Local TTS: macOS `say`
+
+Windows / Linux:
+
+- ASR: Faster-Whisper (default model: `large-v3`)
+- Translation: Faster-Whisper direct translation or optional Ollama
+- Local TTS: Piper with a user-selected `.onnx` voice model
+
+Shared:
+
 - Demucs: `htdemucs`
 - Optional speaker encoder: `speechbrain/spkrec-ecapa-voxceleb`
-- macOS local TTS: `say`
 - Video/audio processing: FFmpeg
-- YouTube retrieval: app-local yt-dlp
-
-Planned cross-platform providers are documented in the SwiftUI redesign spec.
+- YouTube retrieval: yt-dlp
+- Optional hosted TTS: ElevenLabs
