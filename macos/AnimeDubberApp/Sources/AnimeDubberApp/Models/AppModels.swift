@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum SidebarDestination: String, CaseIterable, Identifiable {
+enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
     case newDub
     case projects
     case characters
