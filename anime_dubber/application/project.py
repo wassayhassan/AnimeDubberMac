@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -119,7 +120,7 @@ class ProjectStore:
         _atomic_write(self.manifest_path, payload)
         return payload
 
-    def begin(self, *, job_id: str, kind: str, config: Dict[str, Any], dub_id: str = "", name: str = "") -> dict:
+    def begin(self, *, job_id: str, kind: str, config: Dict[str, Any], dub_id: str = "", name: str = "", retry: bool = False) -> dict:
         now = _now()
         old = self.load()
         if old.get("source") and old["source"] != str(config.get("source") or ""):
@@ -146,6 +147,7 @@ class ProjectStore:
             "stage_title": "Preparing",
             "progress": None,
             "active_job_id": job_id,
+            "active_pid": os.getpid(),
             "created_at": created_at,
             "updated_at": now,
             "config": _redacted_config(config),
@@ -157,7 +159,16 @@ class ProjectStore:
             "runs": runs,
         }
         if dub_id:
-            payload["dubs"].append({
+            existing = next((d for d in payload["dubs"] if d.get("id") == dub_id), None)
+            if retry:
+                if not existing:
+                    raise ValueError("Cannot resume a dub that is not in the project")
+                existing.update(status="running", stage="preparing", updated_at=now,
+                                job_id=job_id, error=None)
+            else:
+                if existing:
+                    raise ValueError("Dub ID already exists")
+                payload["dubs"].append({
                 "id": dub_id, "name": name or f"{config.get('target_language', 'en').upper()} dub",
                 "language": config.get("target_language", "en"),
                 "source_language": config.get("source_language", "zh"),
@@ -165,7 +176,7 @@ class ProjectStore:
                 "updated_at": now, "job_id": job_id, "config": _redacted_config(config),
                 "artifacts": {}, "warnings": [], "error": None,
                 "sync": "Speech clips start at source subtitle timestamps and are trimmed or time-stretched to their source windows.",
-            })
+                })
         _atomic_write(self.manifest_path, payload)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         return payload
@@ -258,6 +269,7 @@ class ProjectStore:
         payload["stage_title"] = status.replace("_", " ").title()
         payload["progress"] = 1.0 if status == "completed" else None
         payload["active_job_id"] = None
+        payload["active_pid"] = None
         payload["updated_at"] = now
         payload["last_error"] = error
         if artifacts:

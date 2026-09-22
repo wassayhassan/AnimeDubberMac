@@ -282,6 +282,9 @@ python -m anime_dubber.cli new-project /path/to/source.mp4 -o ~/Movies/AnimeDubb
 python -m anime_dubber.cli run /path/to/source.mp4 -o ~/Movies/AnimeDubber --dub-name "English — Chatterbox" --tts chatterbox
 python -m anime_dubber.cli run /path/to/source.mp4 -o ~/Movies/AnimeDubber --subtitles-only --target-language es --translation ollama
 python -m anime_dubber.cli projects -o ~/Movies/AnimeDubber
+python -m anime_dubber.cli resume-dub PROJECT_ID DUB_ID -o ~/Movies/AnimeDubber
 ```
 
 Each `run` creates a version. Its translated SRT/VTT appears under `versions/<version-id>/` before dubbing finishes. Non-English dub audio currently requires `--tts elevenlabs` and a multilingual ElevenLabs voice; for other languages without that provider, use `--subtitles-only`.
+
+Use **Pause** while a dub is processing, then **Resume This Dub** in Dub Details. Failed jobs can also be resumed there. Resume preserves the dub ID and completed source, subtitles, translation batches, and voice clips whose settings still match. The operation in progress may need to restart; a model call may finish before the pause takes effect. Restarting the app after a crash also leaves the interrupted dub available to resume. Keep the project's `.anime_dubber_work` directory to retain these checkpoints. For ElevenLabs dubs, re-enter the API key in Settings or pass `--elevenlabs-api-key` when resuming from CLI.

@@ -331,13 +331,30 @@ final class AppState: ObservableObject {
         guard let activeJobID else { return }
         do {
             _ = try backend.send(
-                method: "cancel_job",
+                method: "pause_job",
                 params: ["job_id": activeJobID],
                 id: "cancel-\(UUID().uuidString)"
             )
-            statusText = "Cancelling…"
+            statusText = "Pausing…"
         } catch {
             activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
+        }
+    }
+
+    func resumeDub(_ dub: DubSummary) {
+        guard activeJobID == nil, let project = currentProject else { return }
+        do {
+            statusText = "Resuming \(dub.title)…"
+            progressFraction = nil
+            activityExpanded = true
+            _ = try backend.send(method: "resume_dub", params: [
+                "output_dir": project.outputDir,
+                "project_id": project.id,
+                "dub_id": dub.id,
+                "elevenlabs_api_key": elevenLabsAPIKey,
+            ], id: "resume-\(UUID().uuidString)")
+        } catch {
+            statusText = error.localizedDescription
         }
     }
 
@@ -666,7 +683,7 @@ final class AppState: ObservableObject {
             showingSystemCheck = true
 
         default:
-            if id.hasPrefix("run-") || id.hasPrefix("analyze-") {
+            if id.hasPrefix("run-") || id.hasPrefix("analyze-") || id.hasPrefix("resume-") {
                 if let jobID = result["job_id"] as? String {
                     activeJobID = jobID
                     statusText = "Queued"

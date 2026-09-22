@@ -290,6 +290,21 @@ class ApplicationService:
             data["elevenlabs_api_key"] = "<redacted>"
         return data
 
+    @staticmethod
+    def _check_external_job(project: dict) -> None:
+        if project.get("status") != "running":
+            return
+        pid = project.get("active_pid")
+        if not pid or pid == os.getpid():
+            return
+        try:
+            os.kill(int(pid), 0)
+        except (ProcessLookupError, ValueError):
+            return
+        except PermissionError:
+            pass
+        raise ValueError("Another process is processing this project")
+
     def start_job(self, payload: Dict[str, Any], *, analysis: bool = False) -> str:
         config = config_from_dict(payload)
         if config.target_language != "en" and config.translation == "whisper":
@@ -305,10 +320,16 @@ class ApplicationService:
             kind="analyze" if analysis else "run",
             config=self._normalized_config_dict(config),
         )
+        record.runner = CommandRunner()
         store = ProjectStore(config.output_dir, config.source)
-        store.begin(job_id=job_id, kind=record.kind, config=record.config,
-                    dub_id=dub_id, name=str(payload.get("dub_name") or ""))
         with self._lock:
+            self._check_external_job(store.load())
+            if any(s.project_id == store.project_id and s.output_dir == store.output_dir
+                   and self._jobs[j].status in {"queued", "running"}
+                   for j, s in self._project_stores.items()):
+                raise ValueError("A job is already running for this project")
+            store.begin(job_id=job_id, kind=record.kind, config=record.config,
+                        dub_id=dub_id, name=str(payload.get("dub_name") or ""))
             self._jobs[job_id] = record
             self._project_stores[job_id] = store
 
@@ -350,13 +371,55 @@ class ApplicationService:
             raise CancelledError("Cancelled by user")
         return snapshot
 
+    def resume_dub(self, output_dir: str, project_id: str, dub_id: str, *, api_key: str = "") -> str:
+        """Retry an interrupted version with its original settings and cache directory."""
+        project = self.get_project(output_dir, project_id)
+        dub = next((d for d in project.get("dubs", []) if d.get("id") == dub_id), None)
+        if not dub or dub_id == "legacy":
+            raise ValueError("No resumable dub with that ID")
+        if dub.get("status") not in {"paused", "cancelled", "failed", "running"}:
+            raise ValueError("Only interrupted or failed dubs can be resumed")
+        saved = dict(dub.get("config") or {})
+        if saved.get("version_id") != dub_id or saved.get("source") != project.get("source"):
+            raise ValueError("Dub settings do not match the original project")
+        if Path(str(saved.get("output_dir"))).expanduser().resolve() != Path(output_dir).expanduser().resolve():
+            raise ValueError("Dub output folder has changed")
+        if saved.get("keep_work") is False:
+            raise ValueError("This dub was configured to discard processing files and cannot resume")
+        if saved.get("elevenlabs_api_key") == "<redacted>":
+            if not api_key:
+                raise ValueError("Enter the ElevenLabs key in Settings before resuming this dub")
+            saved["elevenlabs_api_key"] = api_key
+        saved.update(resume=True, force=False, keep_work=True)
+        config = config_from_dict(saved)
+        config.version_id = dub_id
+        store = ProjectStore(config.output_dir, config.source)
+        if store.project_id != project_id:
+            raise ValueError("Project source does not match its manifest")
+        job_id = "job_" + uuid.uuid4().hex[:12]
+        record = JobRecord(id=job_id, kind="run", config=self._normalized_config_dict(config))
+        record.runner = CommandRunner()
+        with self._lock:
+            if any(s.project_id == project_id and s.output_dir == store.output_dir
+                   and self._jobs[j].status in {"queued", "running"}
+                   for j, s in self._project_stores.items()):
+                raise ValueError("A job is already running for this project")
+            # A manifest can say running after a crash. Never take over a live backend.
+            self._check_external_job(store.load())
+            store.begin(job_id=job_id, kind="run", config=record.config, dub_id=dub_id, retry=True)
+            self._jobs[job_id] = record
+            self._project_stores[job_id] = store
+        threading.Thread(target=self._execute, args=(record, config, False),
+                         name=f"AnimeDubber-{job_id}", daemon=True).start()
+        return job_id
+
     def _execute(self, record: JobRecord, config: Config, analysis: bool) -> None:
         from datetime import datetime, timezone
 
         record.status = "running"
         record.stage = "preparing"
         record.started_at = datetime.now(timezone.utc).isoformat()
-        runner = CommandRunner()
+        runner = record.runner or CommandRunner()
         record.runner = runner
         store = self._project_stores.get(record.id)
 
@@ -405,22 +468,31 @@ class ApplicationService:
             # implementation underneath it is still MLX/macOS-specific. Provider
             # replacement happens without changing the SwiftUI/CLI contracts.
             results = analyze_only(config, progress, runner) if analysis else run_pipeline(config, progress, runner)
+            runner.check_cancel()
             record.result = {str(k): str(v) for k, v in results.items()}
-            record.status = "completed"
-            record.stage = "completed"
             if store:
                 store.finish(status="completed", artifacts=record.result, dub_id=config.version_id)
+            record.status = "completed"
+            record.stage = "completed"
             for kind, path in record.result.items():
                 self._emit(AppEvent("artifact", {"kind": kind, "path": path}, record.id))
             self._emit(AppEvent("finished", {"status": "completed", "result": record.result}, record.id))
         except CancelledError as exc:
-            record.status = "cancelled"
-            record.stage = "cancelled"
+            record.status = "paused" if runner.pause_requested else "cancelled"
+            record.stage = record.status
             record.error = str(exc)
             if store:
-                store.finish(status="cancelled", error=str(exc), dub_id=config.version_id)
-            self._emit(AppEvent("finished", {"status": "cancelled"}, record.id))
+                store.finish(status=record.status, error=str(exc), dub_id=config.version_id)
+            self._emit(AppEvent("finished", {"status": record.status}, record.id))
         except Exception as exc:
+            if runner.cancel_event.is_set():
+                record.status = "paused" if runner.pause_requested else "cancelled"
+                record.stage = record.status
+                record.error = "Paused by user" if runner.pause_requested else "Cancelled by user"
+                if store:
+                    store.finish(status=record.status, error=record.error, dub_id=config.version_id)
+                self._emit(AppEvent("finished", {"status": record.status}, record.id))
+                return
             record.status = "failed"
             record.stage = "failed"
             record.error = str(exc)
@@ -443,6 +515,16 @@ class ApplicationService:
             record.runner.cancel()
             return True
         return record.status in {"cancelled", "completed", "failed"}
+
+    def pause_job(self, job_id: str) -> bool:
+        with self._lock:
+            record = self._jobs.get(job_id)
+            if not record or record.status not in {"queued", "running"}:
+                return False
+            if record.runner:
+                record.runner.cancel(pause=True)
+                return True
+        return False
 
     def get_job(self, job_id: str) -> dict:
         with self._lock:

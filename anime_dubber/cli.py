@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -87,6 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
     create.add_argument("--name", default="")
     create.add_argument("--series-id", default="")
+    retry = sub.add_parser("resume-dub", help="Resume a paused or failed dub in place")
+    retry.add_argument("project_id")
+    retry.add_argument("dub_id")
+    retry.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
+    retry.add_argument("--elevenlabs-api-key", default="")
+    retry.add_argument("--json", action="store_true")
 
     return parser
 
@@ -196,6 +203,27 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "new-project":
         print(json.dumps(service.create_project(args.output, args.source, args.name, args.series_id), indent=2))
         return 0
+    if args.command == "resume-dub":
+        try:
+            job_id = service.resume_dub(args.output, args.project_id, args.dub_id,
+                                        api_key=args.elevenlabs_api_key)
+            while service.get_job(job_id)["status"] in {"queued", "running"}:
+                try:
+                    time.sleep(.2)
+                except KeyboardInterrupt:
+                    service.pause_job(job_id)
+                    print("\nPausing; waiting for the current operation to finish…", file=sys.stderr)
+            job = service.get_job(job_id)
+            if args.json:
+                print(json.dumps(job, indent=2))
+            elif job["status"] == "completed":
+                print("Completed:", job["result"])
+            else:
+                print(f"{job['status'].capitalize()}: {job['error']}", file=sys.stderr)
+            return 0 if job["status"] == "completed" else 1
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
 
     analysis = args.command == "analyze"
     try:

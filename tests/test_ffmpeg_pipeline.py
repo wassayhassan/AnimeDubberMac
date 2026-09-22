@@ -19,11 +19,24 @@ from anime_dubber.core import (
     synthesize_macos,
     _pitch_filters,
     _ffconcat_quote,
+    _complete_wav,
 )
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
 class FfmpegPipelineTests(unittest.TestCase):
+    def test_truncated_cached_wav_is_not_a_checkpoint(self):
+        with tempfile.TemporaryDirectory() as td:
+            wav_path = Path(td) / "interrupted.wav"
+            with wave.open(str(wav_path), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44100)
+                output.writeframes(b"\0" * (44100 * 4))
+            self.assertTrue(_complete_wav(wav_path, minimum_seconds=.98))
+            wav_path.write_bytes(wav_path.read_bytes()[:10000])
+            self.assertFalse(_complete_wav(wav_path, minimum_seconds=.98))
+
     def test_local_wav_tts_renders_to_distinct_output_and_resumes(self):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
