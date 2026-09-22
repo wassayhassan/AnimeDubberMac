@@ -525,7 +525,12 @@ class App:
                     continue
                 if not msg.startswith("Downloading source video"):
                     self._set_stage_spinner()
-                clean_status = str(msg).replace("\\r", "\\n").split("\\n")[-1].strip() or "Working…"
+                status_lines = [
+                    x.strip()
+                    for x in str(msg).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                    if x.strip()
+                ]
+                clean_status = status_lines[-1] if status_lines else "Working…"
                 self.status.set(clean_status)
                 self._append_log(msg)
         except queue.Empty:
