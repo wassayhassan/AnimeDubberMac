@@ -20,12 +20,20 @@ def piper_executable() -> Optional[str]:
     return str(sibling) if sibling.exists() else None
 
 
-def piper_available() -> bool:
+def piper_command() -> list[str] | None:
+    exe = piper_executable()
+    if exe:
+        return [exe]
     try:
-        module_ok = importlib.util.find_spec("piper") is not None
+        if importlib.util.find_spec("piper") is not None:
+            return [sys.executable, "-m", "piper"]
     except Exception:
-        module_ok = False
-    return bool(piper_executable()) or module_ok
+        pass
+    return None
+
+
+def piper_available() -> bool:
+    return piper_command() is not None
 
 
 def resolve_piper_model(explicit: str = "") -> Path:
@@ -51,10 +59,10 @@ def synthesize_piper(
     cancel_check: Callable[[], None] | None = None,
 ) -> None:
     """Synthesize with Piper through the stable CLI/stdin interface."""
-    exe = piper_executable()
-    if not exe:
+    base_cmd = piper_command()
+    if not base_cmd:
         raise RuntimeError(
-            "Piper executable was not found. Install piper-tts in the environment "
+            "Piper was not found. Install piper-tts in the environment "
             "or choose ElevenLabs/macOS TTS."
         )
     model = resolve_piper_model(model_path)
@@ -65,7 +73,7 @@ def synthesize_piper(
     safe_rate = max(80, min(450, int(rate)))
     length_scale = max(0.55, min(1.80, 205.0 / safe_rate))
     cmd = [
-        exe,
+        *base_cmd,
         "--model", str(model),
         "--output_file", str(out_wav),
         "--length_scale", f"{length_scale:.4f}",
