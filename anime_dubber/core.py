@@ -108,9 +108,17 @@ class Config:
     source: str
     output_dir: Path
     mode: str = "dub"  # subtitles|dub
-    translation: str = "llm"  # llm|whisper
-    tts_engine: str = "macos"  # macos|elevenlabs
+    asr_provider: str = "auto"  # auto|mlx_whisper|faster_whisper
+    faster_whisper_model: str = "large-v3"
+    faster_whisper_device: str = "auto"  # auto|cpu|cuda
+    faster_whisper_compute_type: str = "auto"
+    translation: str = "llm"  # auto|llm|ollama|whisper
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:4b"
+    tts_engine: str = "macos"  # auto|macos|piper|elevenlabs
     voice: str = ""
+    piper_model: str = ""
+    piper_speaker: int = -1
     tts_rate: int = 210
     context: str = DEFAULT_CONTEXT
     glossary: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_GLOSSARY))
@@ -561,7 +569,14 @@ def transcribe_audio(
     *,
     task: str = "transcribe",
 ) -> List[Segment]:
-    cache_name = "transcript_zh_v3.json" if task == "transcribe" else "transcript_en_whisper_v3.json"
+    from .providers.asr import resolve_asr_provider
+
+    provider = resolve_asr_provider(config.asr_provider)
+    cache_name = (
+        f"transcript_zh_{provider}_v4.json"
+        if task == "transcribe"
+        else f"transcript_en_{provider}_v4.json"
+    )
     cache = work_dir / cache_name
     if config.resume and cache.exists() and not config.force:
         data = json.loads(cache.read_text(encoding="utf-8"))
@@ -574,27 +589,60 @@ def transcribe_audio(
             cache.write_text(json.dumps([s.to_dict() for s in cleaned], ensure_ascii=False, indent=2), encoding="utf-8")
             progress(f"Repaired cached transcript timing: {len(raw_cached)} -> {len(cleaned)} segments")
         return cleaned
-    try:
-        import mlx_whisper
-    except Exception as e:
-        raise PipelineError("mlx-whisper is not installed correctly. Re-run setup.sh") from e
-
-    progress("Transcribing Mandarin with MLX-Whisper…" if task == "transcribe" else "Translating speech directly with Whisper…")
-    runner.check_cancel()
-    result = mlx_whisper.transcribe(
-        str(audio),
-        path_or_hf_repo=WHISPER_MODEL,
-        language="zh",
-        task=task,
-        initial_prompt=(
-            "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
-            if task == "transcribe" else None
-        ),
-        word_timestamps=False,
+    initial_prompt = (
+        "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
+        if task == "transcribe" else None
     )
+    runner.check_cancel()
+
+    if provider == "mlx_whisper":
+        try:
+            import mlx_whisper
+        except Exception as e:
+            raise PipelineError(
+                "MLX Whisper was selected but mlx-whisper is not installed. "
+                "On Windows/Linux install faster-whisper and use --asr faster-whisper."
+            ) from e
+        progress(
+            "Transcribing Mandarin with MLX-Whisper…"
+            if task == "transcribe"
+            else "Translating speech directly with MLX-Whisper…"
+        )
+        result = mlx_whisper.transcribe(
+            str(audio),
+            path_or_hf_repo=WHISPER_MODEL,
+            language="zh",
+            task=task,
+            initial_prompt=initial_prompt,
+            word_timestamps=False,
+        )
+        provider_rows = result.get("segments", [])
+    elif provider == "faster_whisper":
+        from .providers.asr import faster_whisper_segments
+        progress(
+            f"Transcribing Mandarin with Faster-Whisper ({config.faster_whisper_model})…"
+            if task == "transcribe"
+            else f"Translating speech directly with Faster-Whisper ({config.faster_whisper_model})…"
+        )
+        try:
+            provider_rows = faster_whisper_segments(
+                audio,
+                task=task,
+                model_name=config.faster_whisper_model,
+                device=config.faster_whisper_device,
+                compute_type=config.faster_whisper_compute_type,
+                language="zh",
+                initial_prompt=initial_prompt,
+                cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    else:
+        raise PipelineError(f"Unsupported ASR provider: {provider}")
+
     raw_segs = [
         Segment(float(x.get("start", 0)), float(x.get("end", 0)), str(x.get("text", "")).strip())
-        for x in result.get("segments", [])
+        for x in provider_rows
         if str(x.get("text", "")).strip()
     ]
     segs = sanitize_segments(raw_segs)
@@ -946,6 +994,8 @@ def prepare_tts_clip(
     clip_signature = hashlib.sha1(json.dumps({
         "text": text,
         "engine": config.tts_engine,
+        "piper_model": config.piper_model,
+        "piper_speaker": config.piper_speaker,
         "voice": chosen_voice,
         "rate": base_rate,
         "pitch": round(pitch, 3),
@@ -960,10 +1010,33 @@ def prepare_tts_clip(
     if config.resume and wav.exists() and wav.stat().st_size > 1000 and not config.force:
         return wav
     tts_dir.mkdir(parents=True, exist_ok=True)
-    source_audio = tts_dir / (f"{index:06d}_{clip_signature}.aiff" if config.tts_engine == "macos" else f"{index:06d}_{clip_signature}.mp3")
-    if config.tts_engine == "macos":
+    resolved_tts = config.tts_engine
+    if resolved_tts == "auto":
+        if platform.system() == "Darwin" and shutil.which("say"):
+            resolved_tts = "macos"
+        elif config.piper_model.strip() or os.getenv("PIPER_MODEL", "").strip():
+            resolved_tts = "piper"
+        else:
+            resolved_tts = "elevenlabs"
+
+    suffix = ".aiff" if resolved_tts == "macos" else (".wav" if resolved_tts == "piper" else ".mp3")
+    source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
+    if resolved_tts == "macos":
         synthesize_macos(text, source_audio, config, runner, voice=chosen_voice, rate=base_rate)
-    elif config.tts_engine == "elevenlabs":
+    elif resolved_tts == "piper":
+        from .providers.tts import synthesize_piper
+        try:
+            synthesize_piper(
+                text,
+                source_audio,
+                model_path=config.piper_model,
+                rate=base_rate,
+                speaker=(config.piper_speaker if config.piper_speaker >= 0 else None),
+                cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    elif resolved_tts == "elevenlabs":
         # Reuse existing API method with a temporary per-character voice override.
         old = config.elevenlabs_voice_id
         config.elevenlabs_voice_id = eleven_voice
@@ -972,7 +1045,7 @@ def prepare_tts_clip(
         finally:
             config.elevenlabs_voice_id = old
     else:
-        raise PipelineError(f"Unsupported TTS engine: {config.tts_engine}")
+        raise PipelineError(f"Unsupported TTS engine: {resolved_tts}")
 
     source_dur = max(0.05, ffprobe_duration(source_audio, runner))
     target_dur = max(0.18, seg.end - seg.start)
@@ -1517,8 +1590,12 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     metadata = {
         "source": config.source,
         "mode": config.mode,
+        "asr_provider": config.asr_provider,
+        "faster_whisper_model": config.faster_whisper_model,
         "translation": config.translation,
+        "ollama_model": config.ollama_model if config.translation == "ollama" else None,
         "tts_engine": config.tts_engine,
+        "piper_model": config.piper_model if config.tts_engine in {"piper", "auto"} else None,
         "multi_character": config.multi_character,
         "series_id": config.series_id or key,
         "max_speakers": config.max_speakers,
