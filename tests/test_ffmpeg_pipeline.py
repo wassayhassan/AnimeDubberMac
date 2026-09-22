@@ -11,6 +11,7 @@ from anime_dubber.core import (
     Segment,
     ffprobe_duration,
     mix_background_and_dub,
+    build_dialogue_safe_background,
     render_dub_timeline,
     synthesize_macos,
     _pitch_filters,
@@ -45,6 +46,29 @@ class FfmpegPipelineTests(unittest.TestCase):
             self.assertGreaterEqual(ffprobe_duration(timeline, runner), 30.99)
             self.assertGreaterEqual(ffprobe_duration(mixed, runner), 30.99)
 
+
+    def test_dialogue_safe_background_keeps_duration(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            original = d / "original.wav"
+            separated = d / "no_vocals.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=220:duration=3",
+                "-ac", "2", "-ar", "44100", str(original),
+            ], check=True)
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                "-ac", "2", "-ar", "44100", str(separated),
+            ], check=True)
+            cfg = Config(source="x", output_dir=d, chunk_seconds=30, ducking=False)
+            runner = CommandRunner()
+            bed = build_dialogue_safe_background(
+                original, separated, [Segment(1.0, 1.5, "hello")], 3.0, d, cfg, runner, lambda _m: None
+            )
+            self.assertTrue(bed.exists())
+            self.assertGreaterEqual(ffprobe_duration(bed, runner), 2.99)
 
     def test_ffconcat_quote_handles_apostrophe(self):
         quoted = _ffconcat_quote(Path("/tmp/O'Brien/chunk.wav"))
