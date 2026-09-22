@@ -11,12 +11,19 @@ struct AppPreferences: Codable, Equatable {
     var translationProvider = TranslationProvider.llm.rawValue
     var ollamaURL = "http://127.0.0.1:11434"
     var ollamaModel = "qwen3:4b"
-    var voiceProvider = VoiceProvider.macos.rawValue
+
+    var voiceProvider = VoiceProvider.auto.rawValue
     var fallbackVoice = ""
     var ttsRate = 210
+    var chatterboxReferenceAudio = ""
+    var chatterboxExpressiveness = 0.5
+    var chatterboxDevice = "auto"
+    var chatterboxTurbo = true
+    var kokoroVoice = "auto"
     var piperModel = ""
     var piperSpeaker = -1
     var elevenLabsVoiceID = "JBFqnCBsd6RMkjVDRZzb"
+
     var detectCharacters = true
     var resumeCachedWork = true
     var speakerBackend = "auto"
@@ -27,14 +34,35 @@ struct AppPreferences: Codable, Equatable {
     var dubVolume = 1.15
     var backgroundDucking = false
 
-    static let defaultsKey = "AnimeDubberPreferences.v1"
+    static let defaultsKey = "AnimeDubberPreferences.v2"
 
     static func load() -> AppPreferences {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode(AppPreferences.self, from: data) else {
-            return AppPreferences()
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let decoded = try? JSONDecoder().decode(AppPreferences.self, from: data) {
+            return decoded
         }
-        return decoded
+
+        // Migrate the older v1 preferences without failing when new voice fields
+        // did not exist yet. New voice defaults use Automatic / Best Local.
+        if let oldData = UserDefaults.standard.data(forKey: "AnimeDubberPreferences.v1"),
+           let object = try? JSONSerialization.jsonObject(with: oldData) as? [String: Any] {
+            var migrated = AppPreferences()
+            migrated.outputFolder = object["outputFolder"] as? String ?? migrated.outputFolder
+            migrated.seriesID = object["seriesID"] as? String ?? migrated.seriesID
+            migrated.outputMode = object["outputMode"] as? String ?? migrated.outputMode
+            migrated.asrProvider = object["asrProvider"] as? String ?? migrated.asrProvider
+            migrated.translationProvider = object["translationProvider"] as? String ?? migrated.translationProvider
+            migrated.voiceProvider = VoiceProvider.auto.rawValue
+            migrated.fallbackVoice = object["fallbackVoice"] as? String ?? ""
+            migrated.ttsRate = object["ttsRate"] as? Int ?? migrated.ttsRate
+            migrated.detectCharacters = object["detectCharacters"] as? Bool ?? migrated.detectCharacters
+            migrated.resumeCachedWork = object["resumeCachedWork"] as? Bool ?? migrated.resumeCachedWork
+            migrated.backgroundDucking = object["backgroundDucking"] as? Bool ?? migrated.backgroundDucking
+            migrated.save()
+            return migrated
+        }
+
+        return AppPreferences()
     }
 
     func save() {
@@ -58,6 +86,11 @@ struct SettingsSnapshot: Equatable {
     let voiceProvider: VoiceProvider
     let fallbackVoice: String
     let ttsRate: Int
+    let chatterboxReferenceAudio: String
+    let chatterboxExpressiveness: Double
+    let chatterboxDevice: String
+    let chatterboxTurbo: Bool
+    let kokoroVoice: String
     let piperModel: String
     let piperSpeaker: Int
     let elevenLabsVoiceID: String
