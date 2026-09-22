@@ -14,6 +14,7 @@ from anime_dubber.core import (
     source_key,
     srt_timestamp,
     write_srt,
+    _merge_dialogue_guard_intervals,
 )
 
 
@@ -65,6 +66,15 @@ class CoreTests(unittest.TestCase):
             txt = p.read_text(encoding="utf-8")
             self.assertNotIn("bad", txt)
             self.assertIn("good", txt)
+
+    def test_dialogue_guard_intervals_merge_and_pad(self):
+        segs = [Segment(1.0, 1.5, "a"), Segment(1.55, 2.0, "b"), Segment(4.0, 4.5, "c")]
+        out = _merge_dialogue_guard_intervals(segs, 10.0, pre=0.2, post=0.1)
+        self.assertEqual(len(out), 2)
+        self.assertAlmostEqual(out[0][0], 0.8, places=3)
+        self.assertAlmostEqual(out[0][1], 2.1, places=3)
+        self.assertAlmostEqual(out[1][0], 3.8, places=3)
+        self.assertAlmostEqual(out[1][1], 4.6, places=3)
 
     def test_parse_json_translation(self):
         raw = '```json\n[{"id":0,"text":"Hello"},{"id":1,"text":"World"}]\n```'
