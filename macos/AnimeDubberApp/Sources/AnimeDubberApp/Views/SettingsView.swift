@@ -73,7 +73,7 @@ struct SettingsView: View {
                     }
                 }
 
-                LabeledContent("English voice") {
+                LabeledContent("Dub voice") {
                     HStack {
                         Slider(value: $state.dubVolume, in: 0.2...2.0, step: 0.05)
                             .frame(width: 220)
@@ -83,7 +83,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Toggle("Duck background under English dialogue", isOn: $state.backgroundDucking)
+                Toggle("Duck background under dialogue", isOn: $state.backgroundDucking)
             }
         }
         .formStyle(.grouped)

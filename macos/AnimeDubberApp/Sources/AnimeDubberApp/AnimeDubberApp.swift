@@ -13,8 +13,8 @@ struct AnimeDubberApp: App {
         .defaultSize(width: 1180, height: 780)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Dub") {
-                    state.selection = .newDub
+                Button("New Project") {
+                    state.newProject()
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }

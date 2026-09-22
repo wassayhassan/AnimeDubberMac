@@ -8,8 +8,7 @@ struct NewDubView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                sourceSection
-                projectSection
+                identitySection
                 pipelineSection
                 actions
             }
@@ -22,59 +21,46 @@ struct NewDubView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Create English Dub")
+            Text(state.outputMode == .subtitles ? "Generate Subtitles" : "Create Dub Version")
                 .font(.largeTitle.bold())
-            Text("Choose a source, review the pipeline, then let AnimeDubber handle the long-running work.")
+            Text("\(state.currentProject?.displayName ?? "Open a project") · \(state.source)")
                 .font(.title3)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var sourceSection: some View {
-        GroupBox("Source") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    TextField("YouTube URL or local video path", text: $state.source)
-                        .textFieldStyle(.roundedBorder)
-
-                    Button("Choose File…") {
-                        state.chooseSourceFile()
-                    }
-                }
-
-                Text("Paste a YouTube URL or select a local video.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 4)
-        }
-    }
-
-    private var projectSection: some View {
-        GroupBox("Project") {
+    private var identitySection: some View {
+        GroupBox("This Version") {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                 GridRow {
-                    Text("Series ID")
+                    Text("Project")
                         .foregroundStyle(.secondary)
-                    TextField("Optional series identifier", text: $state.seriesID)
-                        .textFieldStyle(.roundedBorder)
+                    Text(state.currentProject?.displayName ?? "No project selected")
                 }
-
                 GridRow {
-                    Text("Output folder")
+                    Text("Create")
                         .foregroundStyle(.secondary)
-                    HStack {
-                        TextField("Output folder", text: $state.outputFolder)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Choose…") {
-                            state.chooseOutputFolder()
-                        }
+                    Picker("Create", selection: $state.outputMode) {
+                        ForEach(OutputMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }
+                    .labelsHidden()
                 }
-
                 GridRow {
-                    Text("")
-                    Toggle("Resume cached work", isOn: $state.resumeCachedWork)
+                    Text("Language")
+                        .foregroundStyle(.secondary)
+                    Picker("Language", selection: $state.targetLanguage) {
+                        Text("English").tag("en")
+                        Text("Spanish").tag("es")
+                        Text("French").tag("fr")
+                        Text("German").tag("de")
+                        Text("Japanese").tag("ja")
+                    }.labelsHidden()
+                }
+                if state.outputMode == .dub {
+                    GridRow {
+                        Text("Dub name").foregroundStyle(.secondary)
+                        TextField("Optional, e.g. English — Chatterbox", text: $state.dubName)
+                    }
                 }
             }
             .padding(.top, 4)
@@ -84,18 +70,6 @@ struct NewDubView: View {
     private var pipelineSection: some View {
         GroupBox("Pipeline") {
             VStack(spacing: 0) {
-                settingRow("Output") {
-                    Picker("Output", selection: $state.outputMode) {
-                        ForEach(OutputMode.allCases) { item in
-                            Text(item.title).tag(item)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 240)
-                }
-
-                Divider()
-
                 settingRow("Speech recognition") {
                     Picker("Speech recognition", selection: $state.asrProvider) {
                         ForEach(ASRProvider.allCases) { item in
@@ -134,6 +108,13 @@ struct NewDubView: View {
 
                 settingRow("Characters") {
                     Toggle("Detect separate speakers", isOn: $state.detectCharacters)
+                }
+
+                if state.targetLanguage != "en" {
+                    Text("Other languages use an LLM or Ollama for translation. Dubbing currently requires an ElevenLabs multilingual voice; subtitles work without one.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
                 }
 
                 Divider()
@@ -196,7 +177,7 @@ struct NewDubView: View {
             }
 
             GridRow {
-                Text("English voice")
+                Text("Dub voice")
                     .foregroundStyle(.secondary)
                 HStack {
                     Slider(value: $state.dubVolume, in: 0.2...2.0, step: 0.05)
@@ -208,7 +189,7 @@ struct NewDubView: View {
 
             GridRow {
                 Text("")
-                Toggle("Duck background under English dialogue", isOn: $state.backgroundDucking)
+                Toggle("Duck background under dialogue", isOn: $state.backgroundDucking)
             }
 
             GridRow {
@@ -234,12 +215,13 @@ struct NewDubView: View {
             }
             .disabled(!state.canStartJob)
 
-            Button("Generate Dub") {
+            Button(state.outputMode == .subtitles ? "Generate Subtitles" : "Generate Dub") {
                 state.startJob(analysis: false)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!state.canStartJob)
+            .disabled(!state.canStartJob || (state.targetLanguage != "en" &&
+                (state.translationProvider == .whisper || (state.outputMode == .dub && state.voiceProvider != .elevenlabs))))
         }
     }
 

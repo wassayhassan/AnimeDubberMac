@@ -19,6 +19,7 @@ jobs:
         run: |
           test -x dist/AnimeDubber.app/Contents/MacOS/AnimeDubber
           test -f dist/AnimeDubber.app/Contents/Info.plist
+          test -f dist/AnimeDubber.app/Contents/Resources/AnimeDubber.icns
           test -f dist/AnimeDubber.app/Contents/Resources/backend/anime_dubber/core.py
           plutil -lint dist/AnimeDubber.app/Contents/Info.plist
 
