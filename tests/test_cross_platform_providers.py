@@ -83,6 +83,26 @@ class CrossPlatformProviderTests(unittest.TestCase):
             self.assertEqual([x.text for x in out], ["你好", "世界"])
             mocked.assert_called_once()
 
+    def test_mlx_provider_migrates_legacy_transcript_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audio = root / "a.wav"
+            audio.write_bytes(b"fake")
+            legacy = root / "transcript_zh_v3.json"
+            legacy.write_text(json.dumps([
+                {"start": 0.0, "end": 1.0, "text": "你好"},
+            ]), encoding="utf-8")
+            cfg = Config(
+                source="input.mp4",
+                output_dir=root,
+                asr_provider="mlx-whisper",
+                resume=True,
+            )
+            with patch("anime_dubber.providers.asr.resolve_asr_provider", return_value="mlx_whisper"):
+                out = transcribe_audio(audio, cfg, root, CommandRunner(), lambda _m: None)
+            self.assertEqual(out[0].text, "你好")
+            self.assertTrue((root / "transcript_zh_mlx_whisper_v4.json").exists())
+
     def test_ollama_generate_parses_response(self):
         class Response:
             def __enter__(self):
