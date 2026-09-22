@@ -1,12 +1,18 @@
-AnimeDubber v3.6
+AnimeDubber v4 alpha
 
-GUI-only macOS build.
+macOS:
+  1. /bin/zsh setup.sh
+  2. Open ~/Applications/AnimeDubber.app
 
-Install:
-  /bin/zsh setup.sh
+Rebuild the native app:
+  /bin/zsh macos/package_app.sh --install
 
-Launch:
-  double-click Run GUI.command
+CLI:
+  .venv/bin/python -m anime_dubber.cli --help
 
-The app includes the v3.4 timestamp/TTS reliability fixes,
-the v3.5 soundtrack restoration fixes, and the v3.6 UI refresh.
+Windows/Linux:
+  Use setup-cross-platform.ps1 or setup-cross-platform.sh
+  and run the CLI.
+
+The old Tkinter frontend has been removed.
+The macOS app uses SwiftUI and launches the Python backend automatically.
