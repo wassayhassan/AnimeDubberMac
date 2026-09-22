@@ -661,16 +661,42 @@ def transcribe_audio(
         else f"transcript_en_{provider}_v4.json"
     )
     cache = work_dir / cache_name
-    if config.resume and cache.exists() and not config.force:
-        data = json.loads(cache.read_text(encoding="utf-8"))
+    legacy_cache = work_dir / (
+        "transcript_zh_v3.json" if task == "transcribe" else "transcript_en_whisper_v3.json"
+    )
+    cache_to_read = cache
+    if (
+        config.resume
+        and not config.force
+        and not cache.exists()
+        and provider == "mlx_whisper"
+        and legacy_cache.exists()
+    ):
+        cache_to_read = legacy_cache
+        progress(f"Reusing legacy MLX transcript cache: {legacy_cache.name}")
+
+    if config.resume and cache_to_read.exists() and not config.force:
+        data = json.loads(cache_to_read.read_text(encoding="utf-8"))
         raw_cached = [Segment.from_dict(x) for x in data]
         cleaned = sanitize_segments(raw_cached)
         if len(cleaned) != len(raw_cached) or any(
             abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
             for a, b in zip(cleaned, raw_cached)
         ):
-            cache.write_text(json.dumps([s.to_dict() for s in cleaned], ensure_ascii=False, indent=2), encoding="utf-8")
             progress(f"Repaired cached transcript timing: {len(raw_cached)} -> {len(cleaned)} segments")
+        if cache_to_read != cache or not cache.exists():
+            cache.write_text(
+                json.dumps([seg.to_dict() for seg in cleaned], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        elif len(cleaned) != len(raw_cached) or any(
+            abs(a.start - b.start) > 1e-6 or abs(a.end - b.end) > 1e-6 or a.text != b.text
+            for a, b in zip(cleaned, raw_cached)
+        ):
+            cache.write_text(
+                json.dumps([seg.to_dict() for seg in cleaned], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return cleaned
     initial_prompt = (
         "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
@@ -1083,25 +1109,7 @@ def prepare_tts_clip(
         gain *= 0.64
 
     eleven_voice = str(profile.get("elevenlabs_voice_id", "") or config.elevenlabs_voice_id)
-    clip_signature = hashlib.sha1(json.dumps({
-        "text": text,
-        "engine": config.tts_engine,
-        "piper_model": config.piper_model,
-        "piper_speaker": config.piper_speaker,
-        "voice": chosen_voice,
-        "rate": base_rate,
-        "pitch": round(pitch, 3),
-        "gain": round(gain, 3),
-        "style": style,
-        "speaker": seg.speaker_id,
-        "eleven_voice": eleven_voice,
-        "eleven_model": config.elevenlabs_model_id,
-        "timing": [round(seg.start, 3), round(seg.end, 3)],
-    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
-    wav = tts_dir / f"{index:06d}_{clip_signature}.wav"
-    if config.resume and wav.exists() and wav.stat().st_size > 1000 and not config.force:
-        return wav
-    tts_dir.mkdir(parents=True, exist_ok=True)
+
     resolved_tts = config.tts_engine
     if resolved_tts == "auto":
         if platform.system() == "Darwin" and shutil.which("say"):
@@ -1116,6 +1124,33 @@ def prepare_tts_clip(
                 resolved_tts = "piper"
             else:
                 resolved_tts = "elevenlabs"
+
+    signature_data = {
+        "text": text,
+        "engine": config.tts_engine,
+        "voice": chosen_voice,
+        "rate": base_rate,
+        "pitch": round(pitch, 3),
+        "gain": round(gain, 3),
+        "style": style,
+        "speaker": seg.speaker_id,
+        "eleven_voice": eleven_voice,
+        "eleven_model": config.elevenlabs_model_id,
+        "timing": [round(seg.start, 3), round(seg.end, 3)],
+    }
+    # Preserve v3.5 cache signatures for macOS/ElevenLabs. Piper-specific
+    # configuration only participates when Piper is actually selected.
+    if resolved_tts == "piper":
+        signature_data["piper_model"] = config.piper_model or os.getenv("PIPER_MODEL", "")
+        signature_data["piper_speaker"] = config.piper_speaker
+
+    clip_signature = hashlib.sha1(
+        json.dumps(signature_data, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    wav = tts_dir / f"{index:06d}_{clip_signature}.wav"
+    if config.resume and wav.exists() and wav.stat().st_size > 1000 and not config.force:
+        return wav
+    tts_dir.mkdir(parents=True, exist_ok=True)
 
     suffix = ".aiff" if resolved_tts == "macos" else (".wav" if resolved_tts == "piper" else ".mp3")
     source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
@@ -1135,7 +1170,6 @@ def prepare_tts_clip(
         except Exception as e:
             raise PipelineError(str(e)) from e
     elif resolved_tts == "elevenlabs":
-        # Reuse existing API method with a temporary per-character voice override.
         old = config.elevenlabs_voice_id
         config.elevenlabs_voice_id = eleven_voice
         try:
