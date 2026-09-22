@@ -12,7 +12,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AnimeDubberApp",
-            path: "Sources/AnimeDubberApp"
+            path: "Sources/AnimeDubberApp",
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         )
     ]
 )
