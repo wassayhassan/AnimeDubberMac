@@ -15,6 +15,7 @@ from anime_dubber.core import (
     srt_timestamp,
     write_srt,
     _merge_dialogue_guard_intervals,
+    _precise_row_bounds,
 )
 
 
@@ -28,6 +29,30 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(atempo_chain(1.0), "atempo=1.000000")
         self.assertEqual(atempo_chain(4.0), "atempo=2.000000,atempo=2.000000")
         self.assertEqual(atempo_chain(0.25), "atempo=0.500000,atempo=0.500000")
+
+    def test_precise_row_bounds_prefers_word_timestamps(self):
+        start, end = _precise_row_bounds({
+            "start": 10.0,
+            "end": 13.0,
+            "words": [
+                {"start": 10.42, "end": 10.80, "word": "你"},
+                {"start": 11.10, "end": 12.55, "word": "好"},
+            ],
+        })
+        self.assertAlmostEqual(start, 10.42, places=3)
+        self.assertAlmostEqual(end, 12.55, places=3)
+
+    def test_precise_row_bounds_rejects_wild_word_jump(self):
+        start, end = _precise_row_bounds({
+            "start": 10.0,
+            "end": 13.0,
+            "words": [
+                {"start": 7.0, "end": 7.4, "word": "bad"},
+                {"start": 15.0, "end": 16.0, "word": "bad"},
+            ],
+        })
+        self.assertAlmostEqual(start, 10.0, places=3)
+        self.assertAlmostEqual(end, 13.0, places=3)
 
     def test_source_key_youtube(self):
         self.assertEqual(source_key("https://youtu.be/WH9x3hYwPj0?x=1"), "WH9x3hYwPj0")

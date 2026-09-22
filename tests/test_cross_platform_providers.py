@@ -169,7 +169,7 @@ class CrossPlatformProviderTests(unittest.TestCase):
             self.assertEqual([x.text for x in out], ["你好", "世界"])
             mocked.assert_called_once()
 
-    def test_mlx_provider_migrates_legacy_transcript_cache(self):
+    def test_mlx_legacy_cache_is_upgraded_to_precise_word_timing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             audio = root / "a.wav"
@@ -184,10 +184,27 @@ class CrossPlatformProviderTests(unittest.TestCase):
                 asr_provider="mlx-whisper",
                 resume=True,
             )
-            with patch("anime_dubber.providers.asr.resolve_asr_provider", return_value="mlx_whisper"):
+            fake_mlx = types.SimpleNamespace(
+                transcribe=lambda *_args, **_kwargs: {
+                    "segments": [{
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "你好",
+                        "words": [
+                            {"start": 0.18, "end": 0.42, "word": "你"},
+                            {"start": 0.46, "end": 0.82, "word": "好"},
+                        ],
+                    }]
+                }
+            )
+            with patch("anime_dubber.providers.asr.resolve_asr_provider", return_value="mlx_whisper"), patch.dict(
+                "sys.modules", {"mlx_whisper": fake_mlx}
+            ):
                 out = transcribe_audio(audio, cfg, root, CommandRunner(), lambda _m: None)
             self.assertEqual(out[0].text, "你好")
-            self.assertTrue((root / "transcript_zh_mlx_whisper_v4.json").exists())
+            self.assertAlmostEqual(out[0].start, 0.18, places=3)
+            self.assertAlmostEqual(out[0].end, 0.82, places=3)
+            self.assertTrue((root / "transcript_zh_mlx_whisper_v5_precise.json").exists())
 
     def test_ollama_generate_parses_response(self):
         class Response:

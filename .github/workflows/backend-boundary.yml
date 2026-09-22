@@ -22,11 +22,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install FFmpeg for sync regression tests
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Source preflight
         run: python verify_source.py
 
       - name: Test application service boundary
-        run: python -m unittest tests.test_application_service tests.test_transport_protocol tests.test_cli tests.test_project_store tests.test_cross_platform_providers -v
+        run: python -m unittest tests.test_application_service tests.test_transport_protocol tests.test_cli tests.test_project_store tests.test_cross_platform_providers tests.test_core tests.test_ffmpeg_pipeline -v
 
       - name: CLI help smoke test
         run: python -m anime_dubber.cli --help
