@@ -199,6 +199,49 @@ def list_projects(output_dir: Path) -> list[dict]:
             "last_error": data.get("last_error"),
             "manifest_path": str(path),
         })
+    known_ids = {str(row.get("project_id") or "") for row in rows}
+
+    # Backfill projects created by v3.x before lightweight manifests existed.
+    # This lets the new Projects screen immediately surface existing completed
+    # work without forcing users to re-run multi-hour jobs.
+    output = Path(output_dir).expanduser().resolve()
+    for run_path in output.glob("*_run.json"):
+        project_id = run_path.name.removesuffix("_run.json")
+        if project_id in known_ids:
+            continue
+        try:
+            metadata = json.loads(run_path.read_text(encoding="utf-8"))
+        except Exception:
+            metadata = {}
+        artifacts: Dict[str, str] = {}
+        candidates = {
+            "dubbed_video": output / f"{project_id}_EN_DUB.mp4",
+            "english_srt": output / f"{project_id}_en.srt",
+            "chinese_srt": output / f"{project_id}_zh.srt",
+            "character_map": output / f"{project_id}_characters.json",
+        }
+        for kind, path in candidates.items():
+            if path.exists():
+                artifacts[kind] = str(path)
+        modified = datetime.fromtimestamp(run_path.stat().st_mtime, tz=timezone.utc).isoformat()
+        rows.append({
+            "project_id": project_id,
+            "source": str(metadata.get("source") or ""),
+            "series_id": str(metadata.get("series_id") or ""),
+            "output_dir": str(output),
+            "status": "completed",
+            "stage": "completed",
+            "stage_title": "Completed",
+            "progress": 1.0,
+            "updated_at": modified,
+            "created_at": modified,
+            "artifacts": artifacts,
+            "warning_count": 0,
+            "last_error": None,
+            "manifest_path": "",
+            "legacy": True,
+        })
+
     rows.sort(key=lambda row: row.get("updated_at") or "", reverse=True)
     return rows
 
