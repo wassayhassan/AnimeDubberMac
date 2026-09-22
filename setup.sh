@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_VERSION="3.3.0"
+APP_VERSION="3.6.0"
 echo "AI Anime English Dubber v${APP_VERSION} — setup"
 echo "========================================"
 
@@ -72,28 +72,30 @@ python verify_source.py
 echo "Running bundled regression/integration tests…"
 python -m unittest discover -s tests -v
 
-echo "Import-checking GUI and CLI modules…"
+echo "Import-checking GUI modules…"
 python - <<'PYIMPORT'
 import anime_dubber
 import anime_dubber.core
 import anime_dubber.characters
-import anime_dubber.cli
 import anime_dubber.gui
 print("Python imports: OK")
 PYIMPORT
 
-echo "Running CLI parser smoke test…"
-python -m anime_dubber.cli --help >/dev/null
-
 echo "Running system check…"
-python -m anime_dubber.cli doctor
+python - <<'PYDOCTOR'
+from anime_dubber.core import doctor
+ok, lines = doctor()
+for line in lines:
+    print(line)
+if not ok:
+    print("WARNING: System check reported one or more items that may need attention.")
+PYDOCTOR
 
 if command -v xattr >/dev/null 2>&1; then
-  echo "Clearing the macOS quarantine attribute from this extracted v3.2 folder (you explicitly chose to run setup.sh)…"
+  echo "Clearing the macOS quarantine attribute from this app folder (you explicitly chose to run setup.sh)…"
   xattr -dr com.apple.quarantine "$PWD" 2>/dev/null || true
 fi
 
 echo ""
 echo "Setup complete."
-echo "GUI: double-click 'Run GUI.command'"
-echo "CLI: ./anime-dubber --help"
+echo "Launch: double-click 'Run GUI.command'"
