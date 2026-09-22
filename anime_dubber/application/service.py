@@ -504,11 +504,17 @@ class ApplicationService:
                 cancel_check=runner.check_cancel,
             )
         elif provider == "kokoro":
-            from ..providers.tts import synthesize_kokoro
+            from ..providers.tts import automatic_kokoro_voice, synthesize_kokoro
+            selected_kokoro = str(settings.get("kokoro_voice") or "auto")
+            if selected_kokoro == "auto":
+                selected_kokoro = automatic_kokoro_voice({
+                    "voice_class": settings.get("voice_class") or "neutral",
+                    "age_group": settings.get("age_group") or "adult",
+                })
             synthesize_kokoro(
                 clean_text,
                 preview_path,
-                voice=str(settings.get("kokoro_voice") or "af_heart"),
+                voice=selected_kokoro,
                 rate=rate,
                 lang_code=str(settings.get("kokoro_language") or "a"),
                 cancel_check=runner.check_cancel,
