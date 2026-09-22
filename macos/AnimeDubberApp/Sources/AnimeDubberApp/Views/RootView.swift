@@ -5,10 +5,15 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarDestination.allCases, selection: $state.selection) { destination in
-                Label(destination.title, systemImage: destination.symbol)
-                    .tag(Optional(destination))
+            List(selection: $state.selection) {
+                ForEach(SidebarDestination.allCases) { destination in
+                    Label(destination.title, systemImage: destination.symbol)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .tag(destination)
+                }
             }
+            .listStyle(.sidebar)
             .navigationTitle("AnimeDubber")
             .navigationSplitViewColumnWidth(min: 180, ideal: 205, max: 260)
         } detail: {
