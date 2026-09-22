@@ -40,6 +40,25 @@ class ProjectStoreTests(unittest.TestCase):
             self.assertEqual(detail["config"]["tts"]["api_key"], "<redacted>")
             self.assertTrue(Path(detail["log_path"]).exists())
 
+    def test_legacy_run_metadata_is_backfilled(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            key = "legacy123"
+            (out / f"{key}_run.json").write_text(
+                json.dumps({
+                    "source": "https://youtu.be/legacy123",
+                    "series_id": "legacy-series",
+                }),
+                encoding="utf-8",
+            )
+            (out / f"{key}_EN_DUB.mp4").write_bytes(b"video")
+            rows = list_projects(out)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["project_id"], key)
+            self.assertEqual(rows[0]["status"], "completed")
+            self.assertTrue(rows[0]["legacy"])
+            self.assertIn("dubbed_video", rows[0]["artifacts"])
+
     def test_service_persists_fake_job(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
