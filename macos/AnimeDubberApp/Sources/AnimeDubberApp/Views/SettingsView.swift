@@ -4,6 +4,11 @@ struct SettingsView: View {
     @EnvironmentObject private var state: AppState
     @State private var selectedTab = "general"
 
+    private let kokoroVoices = [
+        "auto", "af_heart", "af_bella", "af_sarah", "af_sky",
+        "am_adam", "am_michael", "bf_emma", "bf_isabella", "bm_george", "bm_lewis",
+    ]
+
     var body: some View {
         TabView(selection: $selectedTab) {
             general
@@ -134,14 +139,87 @@ struct SettingsView: View {
             }
 
             Section("English Voice") {
-                Picker("TTS provider", selection: $state.voiceProvider) {
+                Picker("Voice engine", selection: $state.voiceProvider) {
                     ForEach(VoiceProvider.allCases) { provider in
                         Text(provider.title).tag(provider)
                     }
                 }
 
+                if state.voiceProvider == .auto {
+                    Text("Automatic prefers Chatterbox Turbo, then Kokoro, then macOS/Piper/ElevenLabs fallbacks depending on what is installed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("Speaking rate") {
+                    Stepper(value: $state.ttsRate, in: 80...450, step: 5) {
+                        Text("\(state.ttsRate)")
+                            .monospacedDigit()
+                    }
+                }
+
+                if state.voiceProvider == .chatterbox || state.voiceProvider == .auto {
+                    Group {
+                        LabeledContent("Chatterbox device") {
+                            Picker("Device", selection: $state.chatterboxDevice) {
+                                Text("Automatic").tag("auto")
+                                Text("Apple GPU · MPS").tag("mps")
+                                Text("NVIDIA · CUDA").tag("cuda")
+                                Text("CPU").tag("cpu")
+                            }
+                            .labelsHidden()
+                            .frame(width: 180)
+                        }
+
+                        Toggle("Use Chatterbox Turbo", isOn: $state.chatterboxTurbo)
+
+                        LabeledContent("Expressiveness") {
+                            HStack {
+                                Slider(value: $state.chatterboxExpressiveness, in: 0...1.5, step: 0.05)
+                                    .frame(width: 220)
+                                Text(state.chatterboxExpressiveness.formatted(.number.precision(.fractionLength(2))))
+                                    .monospacedDigit()
+                                    .frame(width: 40)
+                            }
+                        }
+
+                        LabeledContent("Default reference") {
+                            HStack {
+                                TextField("Optional reference audio", text: $state.chatterboxReferenceAudio)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(minWidth: 280)
+                                Button("Choose…") {
+                                    state.chooseChatterboxReference()
+                                }
+                                if !state.chatterboxReferenceAudio.isEmpty {
+                                    Button("Clear") {
+                                        state.chatterboxReferenceAudio = ""
+                                    }
+                                }
+                            }
+                        }
+
+                        Text("Reference audio is optional. AnimeDubber only uses clips you explicitly choose; use voices you have permission to clone.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if state.voiceProvider == .kokoro || state.voiceProvider == .auto {
+                    LabeledContent("Kokoro voice") {
+                        Picker("Kokoro voice", selection: $state.kokoroVoice) {
+                            ForEach(kokoroVoices, id: \.self) { voice in
+                                Text(voice == "auto" ? "Automatic by character" : voice)
+                                    .tag(voice)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 220)
+                    }
+                }
+
                 if state.voiceProvider == .macos || state.voiceProvider == .auto {
-                    LabeledContent("Fallback voice") {
+                    LabeledContent("macOS fallback") {
                         Picker("Fallback voice", selection: $state.fallbackVoice) {
                             Text("System default").tag("")
                             ForEach(state.installedVoices, id: \.self) { voice in
@@ -150,13 +228,6 @@ struct SettingsView: View {
                         }
                         .labelsHidden()
                         .frame(width: 230)
-                    }
-                }
-
-                LabeledContent("Speaking rate") {
-                    Stepper(value: $state.ttsRate, in: 80...450, step: 5) {
-                        Text("\(state.ttsRate)")
-                            .monospacedDigit()
                     }
                 }
 
@@ -177,9 +248,6 @@ struct SettingsView: View {
                                 .monospacedDigit()
                         }
                     }
-                    Text("Piper requires a compatible .onnx voice model. -1 uses the model's default speaker.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 if state.voiceProvider == .elevenlabs {
@@ -196,7 +264,7 @@ struct SettingsView: View {
                     }
 
                     HStack {
-                        Text("The API key is stored in macOS Keychain, not UserDefaults or project files.")
+                        Text("The API key is stored in macOS Keychain, not project files.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -210,6 +278,12 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                if state.voiceProvider == .chatterbox || state.voiceProvider == .kokoro || state.voiceProvider == .auto {
+                    Text("Premium local engines are optional Python packages. Run macos/install_voice_engines.sh once, then rebuild the app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -232,7 +306,7 @@ struct SettingsView: View {
                     state.runSystemCheck()
                 }
 
-                Text("Installed app builds launch the bundled Python backend automatically. Development builds continue to use the repository backend.")
+                Text("System Check reports whether Chatterbox, Kokoro, and other providers are installed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
