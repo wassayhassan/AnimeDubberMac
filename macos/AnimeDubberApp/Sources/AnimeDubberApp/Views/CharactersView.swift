@@ -39,10 +39,21 @@ struct CharactersView: View {
                     }
                     .width(min: 90, ideal: 110)
 
-                    TableColumn("Voice") { character in
-                        Text(character.macosVoice.isEmpty ? "Automatic" : character.macosVoice)
+                    TableColumn("Voice Engine") { character in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(character.ttsProvider == "inherit" ? "App Default" : character.ttsProvider.capitalized)
+                            if character.ttsProvider == "kokoro", character.kokoroVoice != "auto" {
+                                Text(character.kokoroVoice)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if character.ttsProvider == "macos", !character.macosVoice.isEmpty {
+                                Text(character.macosVoice)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    .width(min: 120, ideal: 150)
+                    .width(min: 120, ideal: 160)
 
                     TableColumn("Lines") { character in
                         Text("\(character.lineCount)")
@@ -72,7 +83,7 @@ struct CharactersView: View {
         )) {
             CharacterInspector()
                 .environmentObject(state)
-                .inspectorColumnWidth(min: 300, ideal: 340, max: 430)
+                .inspectorColumnWidth(min: 320, ideal: 370, max: 460)
         }
         .onChange(of: state.selectedCharacterID) { _, newValue in
             state.selectCharacter(newValue)
@@ -122,6 +133,19 @@ private struct CharacterInspector: View {
     private let roles = ["lead", "major", "supporting", "minor"]
     private let voiceClasses = ["male", "female", "neutral"]
     private let ageGroups = ["child", "adult", "older"]
+    private let engines = [
+        ("inherit", "App Default"),
+        ("auto", "Automatic · Best Local"),
+        ("chatterbox", "Chatterbox Turbo"),
+        ("kokoro", "Kokoro"),
+        ("elevenlabs", "ElevenLabs"),
+        ("macos", "macOS Voice"),
+        ("piper", "Piper"),
+    ]
+    private let kokoroVoices = [
+        "auto", "af_heart", "af_bella", "af_sarah", "af_sky",
+        "am_adam", "am_michael", "bf_emma", "bf_isabella", "bm_george", "bm_lewis",
+    ]
 
     var body: some View {
         ScrollView {
@@ -182,28 +206,90 @@ private struct CharacterInspector: View {
 
                 GroupBox("English Voice") {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            TextField("macOS voice", text: $state.characterDraft.macosVoice)
+                        Picker("Engine", selection: $state.characterDraft.ttsProvider) {
+                            ForEach(engines, id: \.0) { engine in
+                                Text(engine.1).tag(engine.0)
+                            }
+                        }
 
-                            if !state.installedVoices.isEmpty {
-                                Menu {
-                                    Button("Automatic") {
-                                        state.characterDraft.macosVoice = ""
+                        if state.characterDraft.ttsProvider == "inherit" {
+                            Text("Uses the app default: \(state.voiceProvider.title)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if usesChatterbox {
+                            LabeledContent("Reference clip") {
+                                HStack {
+                                    TextField("Optional audio clip", text: $state.characterDraft.referenceAudio)
+                                        .textFieldStyle(.roundedBorder)
+                                    Button("Choose…") {
+                                        state.chooseCharacterReference()
                                     }
-                                    Divider()
-                                    ForEach(state.installedVoices, id: \.self) { voice in
-                                        Button(voice) {
-                                            state.characterDraft.macosVoice = voice
+                                    if !state.characterDraft.referenceAudio.isEmpty {
+                                        Button("Clear") {
+                                            state.characterDraft.referenceAudio = ""
                                         }
                                     }
-                                } label: {
-                                    Image(systemName: "chevron.down")
+                                }
+                            }
+
+                            LabeledContent("Expressiveness") {
+                                HStack {
+                                    Slider(value: $state.characterDraft.expressiveness, in: 0...1.5, step: 0.05)
+                                    Text(state.characterDraft.expressiveness, format: .number.precision(.fractionLength(2)))
+                                        .monospacedDigit()
+                                        .frame(width: 44)
+                                }
+                            }
+
+                            Text("Reference audio is optional and is only used when you explicitly select it. Use a voice you have permission to clone.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if usesKokoro {
+                            LabeledContent("Kokoro voice") {
+                                Picker("Kokoro voice", selection: $state.characterDraft.kokoroVoice) {
+                                    ForEach(kokoroVoices, id: \.self) { voice in
+                                        Text(voice == "auto" ? "Automatic by character" : voice)
+                                            .tag(voice)
+                                    }
+                                }
+                                .labelsHidden()
+                            }
+                        }
+
+                        if usesMacVoice {
+                            HStack {
+                                TextField("macOS voice", text: $state.characterDraft.macosVoice)
+
+                                if !state.installedVoices.isEmpty {
+                                    Menu {
+                                        Button("Automatic") {
+                                            state.characterDraft.macosVoice = ""
+                                        }
+                                        Divider()
+                                        ForEach(state.installedVoices, id: \.self) { voice in
+                                            Button(voice) {
+                                                state.characterDraft.macosVoice = voice
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "chevron.down")
+                                    }
                                 }
                             }
                         }
 
+                        if state.characterDraft.ttsProvider == "elevenlabs" {
+                            LabeledContent("Voice ID") {
+                                TextField("Use app default if empty", text: $state.characterDraft.elevenLabsVoiceID)
+                            }
+                        }
+
                         LabeledContent("Rate") {
-                            Stepper(value: $state.characterDraft.ttsRate, in: 120...350, step: 5) {
+                            Stepper(value: $state.characterDraft.ttsRate, in: 80...450, step: 5) {
                                 Text("\(state.characterDraft.ttsRate)")
                                     .monospacedDigit()
                             }
@@ -254,5 +340,22 @@ private struct CharacterInspector: View {
             }
             .padding(18)
         }
+    }
+
+    private var usesChatterbox: Bool {
+        state.characterDraft.ttsProvider == "chatterbox"
+            || state.characterDraft.ttsProvider == "auto"
+            || (state.characterDraft.ttsProvider == "inherit"
+                && (state.voiceProvider == .chatterbox || state.voiceProvider == .auto))
+    }
+
+    private var usesKokoro: Bool {
+        state.characterDraft.ttsProvider == "kokoro"
+            || (state.characterDraft.ttsProvider == "inherit" && state.voiceProvider == .kokoro)
+    }
+
+    private var usesMacVoice: Bool {
+        state.characterDraft.ttsProvider == "macos"
+            || (state.characterDraft.ttsProvider == "inherit" && state.voiceProvider == .macos)
     }
 }
