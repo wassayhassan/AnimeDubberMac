@@ -2,30 +2,25 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_VERSION="4.0.0a4"
-echo "AI Anime English Dubber v${APP_VERSION} — setup"
-echo "========================================"
+APP_VERSION="4.0.0a5"
+echo "AnimeDubber v${APP_VERSION} — setup"
+echo "================================"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "ERROR: This build targets macOS."
+  echo "ERROR: This setup script targets macOS. Use setup-cross-platform.sh/ps1 on Linux/Windows."
   exit 1
 fi
 if [[ "$(uname -m)" != "arm64" ]]; then
-  echo "ERROR: This build requires an Apple Silicon Mac (M1/M2/M3/M4/M5...)."
+  echo "ERROR: The native macOS build currently targets Apple Silicon."
   exit 1
 fi
 if ! command -v brew >/dev/null 2>&1; then
-  echo "ERROR: Homebrew is required. Install it from https://brew.sh and run this setup again."
+  echo "ERROR: Homebrew is required. Install it from https://brew.sh and run setup again."
   exit 1
 fi
 
 echo "Installing system dependencies (safe to re-run)…"
 brew install ffmpeg yt-dlp deno python@3.11
-if brew info python-tk@3.11 >/dev/null 2>&1; then
-  brew install python-tk@3.11
-else
-  brew install python-tk
-fi
 
 PY="$(brew --prefix python@3.11)/bin/python3.11"
 if [[ ! -x "$PY" ]]; then
@@ -33,7 +28,7 @@ if [[ ! -x "$PY" ]]; then
   exit 1
 fi
 
-echo "Running source-code preflight BEFORE Python package installation…"
+echo "Running source-code preflight before Python package installation…"
 "$PY" verify_source.py
 
 echo "Creating Python 3.11 virtual environment…"
@@ -50,10 +45,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt
 
-echo "Installing a current app-local yt-dlp build (avoids stale PATH copies)…"
-# YouTube delivery changes frequently. Master currently contains fixes newer
-# than some stable/Homebrew builds. If GitHub is temporarily unreachable,
-# fall back to the newest PyPI prerelease/stable build.
+echo "Installing a current app-local yt-dlp build…"
 if ! python -m pip install --upgrade "yt-dlp[default,curl-cffi] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"; then
   echo "WARNING: Could not install yt-dlp master from GitHub; falling back to PyPI."
   python -m pip install --upgrade --pre "yt-dlp[default,curl-cffi]"
@@ -63,7 +55,7 @@ python -m yt_dlp --version
 
 echo "Installing optional high-accuracy speaker encoder…"
 if ! python -m pip install "speechbrain>=1.0,<2"; then
-  echo "WARNING: SpeechBrain could not be installed. v3.1 will still work using its built-in acoustic speaker clustering fallback."
+  echo "WARNING: SpeechBrain could not be installed. AnimeDubber will use its acoustic speaker-clustering fallback."
 fi
 
 echo "Running post-install source preflight…"
@@ -72,7 +64,7 @@ python verify_source.py
 echo "Running bundled regression/integration tests…"
 python -m unittest discover -s tests -v
 
-echo "Import-checking backend, CLI, transport, and temporary GUI modules…"
+echo "Import-checking backend, CLI, and transport modules…"
 python - <<'PYIMPORT'
 import anime_dubber
 import anime_dubber.core
@@ -80,7 +72,6 @@ import anime_dubber.characters
 import anime_dubber.application
 import anime_dubber.cli
 import anime_dubber.transport.stdio_server
-import anime_dubber.gui
 print("Python imports: OK")
 PYIMPORT
 
@@ -91,11 +82,21 @@ echo "Running backend system check…"
 python -m anime_dubber.cli doctor || true
 
 if command -v xattr >/dev/null 2>&1; then
-  echo "Clearing the macOS quarantine attribute from this app folder (you explicitly chose to run setup.sh)…"
   xattr -dr com.apple.quarantine "$PWD" 2>/dev/null || true
 fi
 
-echo ""
+echo
+if command -v swift >/dev/null 2>&1; then
+  echo "Building and installing the native macOS app…"
+  /bin/zsh macos/package_app.sh --install
+  echo
+  echo "Native app installed at: $HOME/Applications/AnimeDubber.app"
+else
+  echo "WARNING: Swift was not found, so the native .app was not built."
+  echo "Install Xcode Command Line Tools with: xcode-select --install"
+  echo "Then run: /bin/zsh macos/package_app.sh --install"
+fi
+
+echo
 echo "Setup complete."
-echo "macOS GUI: double-click 'Run GUI.command'"
 echo "CLI: .venv/bin/python -m anime_dubber.cli --help"

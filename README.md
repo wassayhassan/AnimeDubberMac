@@ -2,45 +2,98 @@
 
 AnimeDubber turns Chinese animation / manhua-drama videos into English-subtitled or English-dubbed videos while preserving the original soundtrack as much as possible.
 
-v4 is being rebuilt around a **native SwiftUI macOS frontend + shared Python application service + cross-platform CLI**.
+The architecture is now:
 
-The complete design is documented in:
+```text
+Native SwiftUI macOS app ─┐
+                          ├── Python ApplicationService ── pipeline/providers
+Cross-platform CLI ───────┘
+```
+
+The approved design lives in:
 
 ```text
 docs/SWIFTUI_REDESIGN_SPEC.md
 ```
 
-## Current v4 alpha status
+## Current v4 status
 
-Phase 4 is underway and now includes:
+Phase 5 now includes:
 
-- a shared Python `ApplicationService` used as the boundary for future SwiftUI and CLI callers;
-- structured jobs and structured progress/events;
-- a newline-delimited JSON stdin/stdout transport for the future SwiftUI app;
-- a restored Python CLI;
-- a native SwiftUI macOS shell connected to the Python backend;
-- persistent lightweight project manifests and project history;
-- a native Projects table with status, artifacts, and resume-oriented settings reuse;
-- a native Characters table and inspector for editing voice assignments;
-- persistent manual character overrides synchronized back to the series voice database;
-- cancellation and job snapshots;
-- provider/capability detection;
-- Faster-Whisper ASR for Windows/Linux and optional non-MLX use;
-- Whisper-direct English translation through Faster-Whisper;
-- optional local Ollama translation;
-- local Piper TTS with configurable voice models;
-- automatic CUDA Demucs fallback on supported Windows/Linux NVIDIA systems;
-- tests for the service, protocol, and CLI;
-- all existing v3.4 timestamp/TTS reliability fixes;
-- all existing v3.5 soundtrack restoration fixes.
+- native SwiftUI macOS frontend;
+- persistent Projects history;
+- native Characters table + inspector;
+- shared Python backend for SwiftUI and CLI;
+- JSONL stdin/stdout backend transport;
+- structured progress, cancellation, diagnostics, and artifacts;
+- MLX Whisper / MLX LLM / macOS voices on Apple silicon;
+- Faster-Whisper / Ollama / Piper providers for Windows and Linux;
+- Demucs CUDA fallback on supported NVIDIA systems;
+- provider configuration from the macOS Settings window;
+- persistent macOS app preferences;
+- ElevenLabs API key stored in macOS Keychain;
+- local `.app` packaging and installation;
+- existing v3.4 timestamp/TTS reliability fixes;
+- existing v3.5 soundtrack-preservation fixes.
 
-The existing Tkinter GUI is still present **temporarily** as a fallback while SwiftUI reaches full feature parity. The SwiftUI New Dub, Projects, Activity, System Check, and Characters workflows are now implemented.
+The old Tkinter GUI has been removed. The CLI remains permanently for Windows, Linux, automation, and headless workflows.
+
+## macOS install
+
+Apple Silicon macOS 14+:
+
+```bash
+cd /path/to/AnimeDubberMac
+/bin/zsh setup.sh
+```
+
+Setup installs the Python dependencies, runs the tests and backend checks, then builds and installs:
+
+```text
+~/Applications/AnimeDubber.app
+```
+
+Open it normally from Finder or Spotlight.
+
+To rebuild only the native app:
+
+```bash
+/bin/zsh macos/package_app.sh --install
+```
+
+To build, install, and immediately open it:
+
+```bash
+/bin/zsh macos/package_app.sh --install --open
+```
+
+### Why the macOS app is large
+
+The local packaged app embeds the existing Python virtual environment so it can launch the backend without `swift run` or a Terminal window. That environment contains ML/audio dependencies and can be around 2 GB.
+
+Model weights are **not** copied into the app. MLX / Hugging Face model caches remain in their normal user cache locations.
+
+The current packager is intended for a local build on the same Mac. A future signed/notarized public release can move to a dedicated relocatable Python runtime.
+
+## macOS Settings
+
+The native Settings window now controls:
+
+- ASR provider: Automatic / MLX Whisper / Faster-Whisper
+- translation: Automatic / local MLX LLM / Ollama / Whisper direct
+- TTS: Automatic / macOS / Piper / ElevenLabs
+- Faster-Whisper model, device, and compute type
+- Ollama URL and model
+- Piper voice model and speaker ID
+- fallback macOS voice and speaking rate
+- default output folder / series ID
+- speaker detection and audio defaults
+
+The ElevenLabs API key is stored in **macOS Keychain**. It is not written to project manifests.
 
 ## CLI
 
-The CLI is back as a permanent interface.
-
-Cross-platform command syntax:
+The CLI remains a first-class interface:
 
 ```bash
 python -m anime_dubber.cli doctor
@@ -49,37 +102,9 @@ python -m anime_dubber.cli analyze VIDEO --series-id my-series
 python -m anime_dubber.cli run VIDEO --output ./output --series-id my-series
 ```
 
-On Apple-silicon macOS, MLX Whisper + the MLX local LLM + macOS voices remain the preferred defaults.
+### Windows / Linux
 
-On Windows/Linux, AnimeDubber can now run the same pipeline with Faster-Whisper for ASR, Whisper-direct or Ollama translation, Demucs, and Piper or ElevenLabs TTS. Provider selection is explicit but `auto` chooses sensible platform defaults.
-
-Example local Windows/Linux dub:
-
-```bash
-python -m anime_dubber.cli run VIDEO \
-  --output ./output \
-  --asr faster-whisper \
-  --translation whisper \
-  --tts piper \
-  --piper-model /path/to/en_US-voice.onnx
-```
-
-Example using Ollama for translation:
-
-```bash
-python -m anime_dubber.cli run VIDEO \
-  --output ./output \
-  --asr faster-whisper \
-  --translation ollama \
-  --ollama-model qwen3:4b \
-  --tts piper \
-  --piper-model /path/to/en_US-voice.onnx
-```
-
-
-## Windows / Linux setup
-
-FFmpeg and ffprobe must be installed on your system PATH.
+Install FFmpeg / ffprobe on PATH first.
 
 Linux:
 
@@ -93,140 +118,112 @@ Windows PowerShell:
 .\setup-cross-platform.ps1
 ```
 
-Equivalent manual setup:
+Example local Windows/Linux dub:
 
 ```bash
-python -m venv .venv
-python -m pip install -r requirements-cross-platform.txt
+python -m anime_dubber.cli run VIDEO \
+  --output ./output \
+  --asr faster-whisper \
+  --translation whisper \
+  --tts piper \
+  --piper-model /path/to/en_US-voice.onnx
 ```
 
-Then verify providers:
+With Ollama translation:
 
 ```bash
-python -m anime_dubber.cli doctor
-python -m anime_dubber.cli capabilities
+python -m anime_dubber.cli run VIDEO \
+  --output ./output \
+  --asr faster-whisper \
+  --translation ollama \
+  --ollama-model qwen3:4b \
+  --tts piper \
+  --piper-model /path/to/en_US-voice.onnx
 ```
 
-For Piper, download a compatible English `.onnx` voice model and provide it with `--piper-model`, or set `PIPER_MODEL`. Ollama is optional and is only required when `--translation ollama` is selected. ElevenLabs remains available as an alternative TTS provider.
+Piper requires a compatible English `.onnx` voice model. Ollama is optional. ElevenLabs remains available as an alternative TTS provider.
 
-## SwiftUI backend protocol
+## SwiftUI ↔ Python backend
 
-During development the future SwiftUI app will launch:
+The native app launches:
 
-```bash
-.venv/bin/python -m anime_dubber.transport.stdio_server
+```text
+anime_dubber.transport.stdio_server
 ```
 
-Communication is newline-delimited JSON over stdin/stdout, so AnimeDubber does not need a localhost HTTP server or network port.
+from the backend bundled inside the app. Development builds can still locate the repository backend automatically.
 
-Example request:
+Communication is newline-delimited JSON over stdin/stdout. No localhost server or open network port is required.
+
+Example:
 
 ```json
 {"type":"request","id":"42","method":"hello","params":{}}
 ```
 
-Example response:
+The backend emits structured stage, progress, log, warning, artifact, error, and completion events.
 
-```json
-{"type":"response","id":"42","ok":true,"result":{"backend":"AnimeDubber","version":"4.0.0a4","protocol_version":1}}
-```
+## Audio behavior
 
-Long-running jobs send asynchronous event messages for stages, progress, logs, warnings, artifacts, errors, and completion.
+AnimeDubber retains the v3.4/v3.5 fixes:
 
-## Audio behavior retained from v3.4/v3.5
-
-- malformed / reversed Whisper timestamps are sanitized before SRT and TTS;
+- malformed / reversed Whisper timestamps are sanitized;
 - duplicate micro-segments are collapsed;
 - zero-sample TTS clips are rejected;
 - TTS lead-in silence is trimmed;
-- the untouched original soundtrack is preserved outside dialogue;
-- Demucs `no_vocals` is used only around detected source dialogue, with guard padding to reduce voice bleed;
-- optional ducking is intentionally gentle and off by default.
+- untouched original soundtrack is preserved outside dialogue;
+- Demucs `no_vocals` is used only around detected source dialogue;
+- pre/post dialogue guards reduce source-voice bleed;
+- background ducking is gentle and off by default.
 
-## Native SwiftUI macOS app
-
-After setup, run the current native frontend from the repository:
-
-```bash
-cd macos/AnimeDubberApp
-swift run
-```
-
-During development the Swift app finds the repository root, launches the existing `.venv` Python backend, and communicates over JSONL stdin/stdout.
-
-Projects are stored as lightweight manifests under:
-
-```text
-.anime_dubber_project/
-```
-
-Existing v3.x `*_run.json` jobs are automatically surfaced in the Projects screen, so old completed jobs do not need to be reprocessed.
-
-Character overrides made in SwiftUI are written to the existing `*_characters.json` map and synchronized to `.anime_dubber_series/` so the same character voice persists across episodes.
-
-## Current macOS install
-
-From Terminal:
-
-```bash
-cd /path/to/AnimeDubberMac
-/bin/zsh setup.sh
-```
-
-The temporary Tkinter GUI can still be launched with:
-
-```text
-Run GUI.command
-```
-
-or:
-
-```bash
-.venv/bin/python -m anime_dubber.gui
-```
-
-## Current generated files
+## Project data
 
 Typical output:
 
-- `<key>_zh.srt` — Mandarin transcript
-- `<key>_en.srt` — English subtitles
-- `<key>_characters.json` — character / voice assignments
-- `<key>_EN_DUB.mp4` — final English dub
-- `<key>_run.json` — run metadata
+- `<key>_zh.srt`
+- `<key>_en.srt`
+- `<key>_characters.json`
+- `<key>_EN_DUB.mp4`
+- `<key>_run.json`
 
-Cached processing remains under:
+Heavy resumable work remains in:
 
 ```text
 .anime_dubber_work/
 ```
 
-Persistent series character data remains under:
+Persistent series character data:
 
 ```text
 .anime_dubber_series/
 ```
 
-Existing caches are intentionally preserved through the v4 migration where compatible.
+Lightweight project manifests / logs:
 
-## Current models / software
+```text
+.anime_dubber_project/
+```
 
-macOS Apple silicon:
+Existing compatible caches are reused during the v4 migration.
 
-- MLX Whisper: `mlx-community/whisper-large-v3-turbo`
-- Local translator: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
-- Local TTS: macOS `say`
+## Core providers
+
+Apple Silicon macOS:
+
+- ASR: MLX Whisper
+- translation: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
+- TTS: macOS `say`
 
 Windows / Linux:
 
-- ASR: Faster-Whisper (default model: `large-v3`)
-- Translation: Faster-Whisper direct translation or optional Ollama
-- Local TTS: Piper with a user-selected `.onnx` voice model
+- ASR: Faster-Whisper
+- translation: Whisper direct or Ollama
+- local TTS: Piper
 
 Shared:
 
-- Demucs: `htdemucs`
-- Optional speaker encoder: `speechbrain/spkrec-ecapa-voxceleb`
-- Video/audio processing: FFmpeg
-- YouTube retrieval: yt-dlp
-- Optional hosted TTS: ElevenLabs
+- Demucs
+- optional SpeechBrain ECAPA speaker encoder
+- FFmpeg
+- yt-dlp
+- optional ElevenLabs TTS

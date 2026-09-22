@@ -38,6 +38,19 @@ class ApplicationServiceTests(unittest.TestCase):
         self.assertAlmostEqual(cfg.dub_volume, 1.2)
         self.assertTrue(str(cfg.output_dir).endswith("AnimeDubberOut"))
 
+    def test_job_snapshot_redacts_elevenlabs_key(self):
+        service = ApplicationService()
+        cfg = config_from_dict({
+            "source": "video.mp4",
+            "output_dir": "/tmp/out",
+            "tts": {
+                "provider": "elevenlabs",
+                "api_key": "secret-value",
+            },
+        })
+        normalized = service._normalized_config_dict(cfg)
+        self.assertEqual(normalized["elevenlabs_api_key"], "<redacted>")
+
     def test_progress_download_is_structured(self):
         event = progress_to_event(
             "__DOWNLOAD_PROGRESS__|42.5|8.1MiB/s|00:31|1.2GiB|2|3",

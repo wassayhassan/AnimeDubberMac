@@ -43,27 +43,51 @@ enum OutputMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum ASRProvider: String, CaseIterable, Identifiable {
+    case auto
+    case mlxWhisper = "mlx_whisper"
+    case fasterWhisper = "faster_whisper"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .auto: "Automatic"
+        case .mlxWhisper: "MLX Whisper"
+        case .fasterWhisper: "Faster-Whisper"
+        }
+    }
+}
+
 enum TranslationProvider: String, CaseIterable, Identifiable {
+    case auto
     case llm
+    case ollama
     case whisper
 
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .llm: "Local LLM"
+        case .auto: "Automatic"
+        case .llm: "Local MLX LLM"
+        case .ollama: "Ollama"
         case .whisper: "Whisper direct"
         }
     }
 }
 
 enum VoiceProvider: String, CaseIterable, Identifiable {
+    case auto
     case macos
+    case piper
     case elevenlabs
 
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .auto: "Automatic"
         case .macos: "macOS Local"
+        case .piper: "Piper Local"
         case .elevenlabs: "ElevenLabs"
         }
     }

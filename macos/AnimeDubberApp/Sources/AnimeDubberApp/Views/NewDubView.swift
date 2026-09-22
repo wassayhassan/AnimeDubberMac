@@ -96,6 +96,18 @@ struct NewDubView: View {
 
                 Divider()
 
+                settingRow("Speech recognition") {
+                    Picker("Speech recognition", selection: $state.asrProvider) {
+                        ForEach(ASRProvider.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 240)
+                }
+
+                Divider()
+
                 settingRow("Translation") {
                     Picker("Translation", selection: $state.translationProvider) {
                         ForEach(TranslationProvider.allCases) { item in
