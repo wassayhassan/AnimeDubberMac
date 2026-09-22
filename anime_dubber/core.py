@@ -1121,6 +1121,10 @@ def prepare_tts_clip(
     chatterbox_expressiveness = float(
         profile.get("expressiveness", config.chatterbox_expressiveness)
     )
+    if style == "shouting":
+        chatterbox_expressiveness = min(1.5, chatterbox_expressiveness + 0.25)
+    elif style == "whispering":
+        chatterbox_expressiveness = max(0.0, chatterbox_expressiveness - 0.15)
     kokoro_voice = str(profile.get("kokoro_voice", "") or config.kokoro_voice).strip()
     profile_engine = str(profile.get("tts_provider", "") or "").strip().lower()
     resolved_tts = profile_engine if profile_engine and profile_engine != "inherit" else config.tts_engine
