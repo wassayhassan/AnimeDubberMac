@@ -11,8 +11,25 @@ final class AppState: ObservableObject {
     @Published var outputFolder = "~/Movies/AnimeDubber"
     @Published var seriesID = "10000-years-cultivation"
     @Published var outputMode: OutputMode = .dub
+
+    @Published var asrProvider: ASRProvider = .auto
+    @Published var fasterWhisperModel = "large-v3"
+    @Published var fasterWhisperDevice = "auto"
+    @Published var fasterWhisperComputeType = "auto"
+
     @Published var translationProvider: TranslationProvider = .llm
+    @Published var ollamaURL = "http://127.0.0.1:11434"
+    @Published var ollamaModel = "qwen3:4b"
+
     @Published var voiceProvider: VoiceProvider = .macos
+    @Published var fallbackVoice = ""
+    @Published var ttsRate = 210
+    @Published var piperModel = ""
+    @Published var piperSpeaker = -1
+    @Published var elevenLabsVoiceID = "JBFqnCBsd6RMkjVDRZzb"
+    @Published var elevenLabsAPIKey = ""
+    @Published var credentialStatus = ""
+
     @Published var detectCharacters = true
     @Published var resumeCachedWork = true
     @Published var speakerBackend = "auto"
@@ -47,6 +64,8 @@ final class AppState: ObservableObject {
     private let backend = BackendProcess()
 
     init() {
+        loadPreferences()
+        elevenLabsAPIKey = KeychainStore.string(for: "elevenlabs-api-key") ?? ""
         connectBackend()
     }
 
@@ -57,6 +76,111 @@ final class AppState: ObservableObject {
     var canStartJob: Bool {
         guard case .ready = backendState else { return false }
         return !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && activeJobID == nil
+    }
+
+    var settingsSnapshot: SettingsSnapshot {
+        SettingsSnapshot(
+            outputFolder: outputFolder,
+            seriesID: seriesID,
+            outputMode: outputMode,
+            asrProvider: asrProvider,
+            fasterWhisperModel: fasterWhisperModel,
+            fasterWhisperDevice: fasterWhisperDevice,
+            fasterWhisperComputeType: fasterWhisperComputeType,
+            translationProvider: translationProvider,
+            ollamaURL: ollamaURL,
+            ollamaModel: ollamaModel,
+            voiceProvider: voiceProvider,
+            fallbackVoice: fallbackVoice,
+            ttsRate: ttsRate,
+            piperModel: piperModel,
+            piperSpeaker: piperSpeaker,
+            elevenLabsVoiceID: elevenLabsVoiceID,
+            detectCharacters: detectCharacters,
+            resumeCachedWork: resumeCachedWork,
+            speakerBackend: speakerBackend,
+            maxSpeakers: maxSpeakers,
+            speakerThreshold: speakerThreshold,
+            seriesContext: seriesContext,
+            backgroundVolume: backgroundVolume,
+            dubVolume: dubVolume,
+            backgroundDucking: backgroundDucking
+        )
+    }
+
+    func savePreferences() {
+        AppPreferences(
+            outputFolder: outputFolder,
+            seriesID: seriesID,
+            outputMode: outputMode.rawValue,
+            asrProvider: asrProvider.rawValue,
+            fasterWhisperModel: fasterWhisperModel,
+            fasterWhisperDevice: fasterWhisperDevice,
+            fasterWhisperComputeType: fasterWhisperComputeType,
+            translationProvider: translationProvider.rawValue,
+            ollamaURL: ollamaURL,
+            ollamaModel: ollamaModel,
+            voiceProvider: voiceProvider.rawValue,
+            fallbackVoice: fallbackVoice,
+            ttsRate: ttsRate,
+            piperModel: piperModel,
+            piperSpeaker: piperSpeaker,
+            elevenLabsVoiceID: elevenLabsVoiceID,
+            detectCharacters: detectCharacters,
+            resumeCachedWork: resumeCachedWork,
+            speakerBackend: speakerBackend,
+            maxSpeakers: maxSpeakers,
+            speakerThreshold: speakerThreshold,
+            seriesContext: seriesContext,
+            backgroundVolume: backgroundVolume,
+            dubVolume: dubVolume,
+            backgroundDucking: backgroundDucking
+        ).save()
+    }
+
+    func saveSecrets() {
+        do {
+            let trimmed = elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                try KeychainStore.delete("elevenlabs-api-key")
+                credentialStatus = "API key removed from Keychain."
+            } else {
+                try KeychainStore.set(trimmed, for: "elevenlabs-api-key")
+                credentialStatus = "API key saved securely in Keychain."
+            }
+        } catch {
+            credentialStatus = error.localizedDescription
+        }
+    }
+
+    private func loadPreferences() {
+        let preferences = AppPreferences.load()
+
+        outputFolder = preferences.outputFolder
+        seriesID = preferences.seriesID
+        outputMode = OutputMode(rawValue: preferences.outputMode) ?? .dub
+        asrProvider = ASRProvider(rawValue: preferences.asrProvider) ?? .auto
+        fasterWhisperModel = preferences.fasterWhisperModel
+        fasterWhisperDevice = preferences.fasterWhisperDevice
+        fasterWhisperComputeType = preferences.fasterWhisperComputeType
+        translationProvider = TranslationProvider(rawValue: preferences.translationProvider) ?? .llm
+        ollamaURL = preferences.ollamaURL
+        ollamaModel = preferences.ollamaModel
+        voiceProvider = VoiceProvider(rawValue: preferences.voiceProvider) ?? .macos
+        fallbackVoice = preferences.fallbackVoice
+        ttsRate = preferences.ttsRate
+        piperModel = preferences.piperModel
+        piperSpeaker = preferences.piperSpeaker
+        elevenLabsVoiceID = preferences.elevenLabsVoiceID
+        detectCharacters = preferences.detectCharacters
+        resumeCachedWork = preferences.resumeCachedWork
+        speakerBackend = preferences.speakerBackend
+        maxSpeakers = preferences.maxSpeakers
+        speakerThreshold = preferences.speakerThreshold
+        seriesContext = preferences.seriesContext
+        backgroundVolume = preferences.backgroundVolume
+        dubVolume = preferences.dubVolume
+        backgroundDucking = preferences.backgroundDucking
     }
 
     func connectBackend() {
@@ -109,6 +233,7 @@ final class AppState: ObservableObject {
     func startJob(analysis: Bool) {
         guard canStartJob else { return }
 
+        savePreferences()
         let threshold: Any = speakerThreshold == 0 ? NSNull() : speakerThreshold
 
         let params: [String: Any] = [
@@ -116,8 +241,26 @@ final class AppState: ObservableObject {
             "output_dir": outputFolder,
             "series_id": seriesID,
             "mode": outputMode.rawValue,
-            "translation": ["provider": translationProvider.rawValue],
-            "tts": ["provider": voiceProvider.rawValue],
+            "asr": [
+                "provider": asrProvider.rawValue,
+                "model": fasterWhisperModel,
+                "device": fasterWhisperDevice,
+                "compute_type": fasterWhisperComputeType,
+            ],
+            "translation": [
+                "provider": translationProvider.rawValue,
+                "ollama_url": ollamaURL,
+                "model": ollamaModel,
+            ],
+            "tts": [
+                "provider": voiceProvider.rawValue,
+                "fallback_voice": fallbackVoice,
+                "rate": ttsRate,
+                "piper_model": piperModel,
+                "piper_speaker": piperSpeaker,
+                "api_key": elevenLabsAPIKey,
+                "voice_id": elevenLabsVoiceID,
+            ],
             "speaker_analysis": [
                 "enabled": detectCharacters,
                 "backend": speakerBackend,
@@ -287,6 +430,22 @@ final class AppState: ObservableObject {
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
             outputFolder = url.path
+            savePreferences()
+        }
+    }
+
+    func choosePiperModel() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Piper Voice Model"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        if let onnx = UTType(filenameExtension: "onnx") {
+            panel.allowedContentTypes = [onnx]
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            piperModel = url.path
+            savePreferences()
         }
     }
 
