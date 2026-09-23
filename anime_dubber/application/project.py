@@ -139,7 +139,7 @@ class ProjectStore:
             "schema_version": 2,
             "project_id": self.project_id,
             "source": str(config.get("source") or ""),
-            "series_id": str(config.get("series_id") or ""),
+            "series_id": str(config.get("series_id") or old.get("series_id") or ""),
             "name": old.get("name") or "",
             "output_dir": str(self.output_dir),
             "status": "running",
@@ -164,7 +164,7 @@ class ProjectStore:
                 if not existing:
                     raise ValueError("Cannot resume a dub that is not in the project")
                 existing.update(status="running", stage="preparing", updated_at=now,
-                                job_id=job_id, error=None)
+                                job_id=job_id, error=None, config=_redacted_config(config))
             else:
                 if existing:
                     raise ValueError("Dub ID already exists")
@@ -311,10 +311,17 @@ class ProjectStore:
             key: value for key, value in payload.get("subtitles", {}).items()
             if not key.startswith(dub_id + ":")
         }
-        payload["artifacts"] = {
-            key: value for key, value in payload.get("artifacts", {}).items()
-            if not Path(str(value)).is_relative_to(version_root)
-        }
+        artifacts = dict(payload.get("artifacts") or {})
+        for kind, value in list(artifacts.items()):
+            if Path(str(value)).resolve().is_relative_to(version_root):
+                replacement = next((other.get("artifacts", {}).get(kind)
+                                    for other in reversed(payload["dubs"])
+                                    if other.get("artifacts", {}).get(kind)), None)
+                if replacement:
+                    artifacts[kind] = replacement
+                else:
+                    artifacts.pop(kind)
+        payload["artifacts"] = artifacts
         payload["updated_at"] = _now()
         _atomic_write(self.manifest_path, payload)
         return payload

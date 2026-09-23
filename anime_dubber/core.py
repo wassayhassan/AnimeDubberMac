@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -304,30 +305,40 @@ def srt_timestamp(seconds: float) -> str:
 
 def write_srt(segments: Sequence[Segment], path: Path, translated: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        n = 1
-        for seg in segments:
-            text = seg.translated if translated else seg.text
-            text = (text or "").strip()
-            if not text:
-                continue
-            if not (math.isfinite(float(seg.start)) and math.isfinite(float(seg.end))) or float(seg.end) <= float(seg.start):
-                continue
-            f.write(f"{n}\n{srt_timestamp(seg.start)} --> {srt_timestamp(seg.end)}\n{text}\n\n")
-            n += 1
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp.open("w", encoding="utf-8") as f:
+            n = 1
+            for seg in segments:
+                text = seg.translated if translated else seg.text
+                text = (text or "").strip()
+                if not text:
+                    continue
+                if not (math.isfinite(float(seg.start)) and math.isfinite(float(seg.end))) or float(seg.end) <= float(seg.start):
+                    continue
+                f.write(f"{n}\n{srt_timestamp(seg.start)} --> {srt_timestamp(seg.end)}\n{text}\n\n")
+                n += 1
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def write_vtt(segments: Sequence[Segment], path: Path, translated: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        handle.write("WEBVTT\n\n")
-        for seg in segments:
-            value = ((seg.translated if translated else seg.text) or "").strip()
-            if not value or not (math.isfinite(seg.start) and math.isfinite(seg.end)) or seg.end <= seg.start:
-                continue
-            start = srt_timestamp(seg.start).replace(",", ".")
-            end = srt_timestamp(seg.end).replace(",", ".")
-            handle.write(f"{start} --> {end}\n{value}\n\n")
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp.open("w", encoding="utf-8") as handle:
+            handle.write("WEBVTT\n\n")
+            for seg in segments:
+                value = ((seg.translated if translated else seg.text) or "").strip()
+                if not value or not (math.isfinite(seg.start) and math.isfinite(seg.end)) or seg.end <= seg.start:
+                    continue
+                start = srt_timestamp(seg.start).replace(",", ".")
+                end = srt_timestamp(seg.end).replace(",", ".")
+                handle.write(f"{start} --> {end}\n{value}\n\n")
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _complete_wav(path: Path, *, minimum_seconds: float = 0.01) -> bool:
@@ -1940,6 +1951,23 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     else:
         raise PipelineError(f"Unsupported translation mode: {translation_mode}")
 
+    # Subtitles are usable output in their own right. Publish them before voice
+    # analysis so a slow or failed speaker pass cannot hold back the files.
+    en_srt = version_dir / f"{key}_{config.target_language}.srt"
+    write_srt(segments, en_srt, translated=True)
+    en_vtt = version_dir / f"{key}_{config.target_language}.vtt"
+    write_vtt(segments, en_vtt, translated=True)
+    publish("translated_srt", en_srt, config.target_language)
+    publish("translated_vtt", en_vtt, config.target_language)
+    results: Dict[str, Path] = {"chinese_srt": zh_srt, "chinese_vtt": zh_vtt,
+                                "translated_srt": en_srt, "translated_vtt": en_vtt}
+    if config.target_language == "en":
+        results["english_srt"] = en_srt
+
+    if config.mode == "subtitles":
+        progress(f"DONE: {en_srt}")
+        return results
+
     profiles = []
     profile_map: Dict[str, dict] = {}
     char_path = _character_map_path(config, out, key)
@@ -1971,26 +1999,12 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         profile_map = _profile_dict(profiles)
         progress(f"Character map: {char_path}")
 
-    en_srt = version_dir / f"{key}_{config.target_language}.srt"
-    write_srt(segments, en_srt, translated=True)
-    en_vtt = version_dir / f"{key}_{config.target_language}.vtt"
-    write_vtt(segments, en_vtt, translated=True)
-    publish("translated_srt", en_srt, config.target_language)
-    publish("translated_vtt", en_vtt, config.target_language)
-    results: Dict[str, Path] = {"chinese_srt": zh_srt, "chinese_vtt": zh_vtt,
-                                "translated_srt": en_srt, "translated_vtt": en_vtt}
-    if config.target_language == "en":
-        results["english_srt"] = en_srt
     if profiles:
         snapshot_map = version_dir / f"{key}_characters.json" if config.version_id else char_path
         if snapshot_map != char_path:
             shutil.copy2(char_path, snapshot_map)
         results["character_map"] = snapshot_map
         publish("character_map", snapshot_map, config.target_language)
-
-    if config.mode == "subtitles":
-        progress(f"DONE: {en_srt}")
-        return results
 
     tts_dir = work / f"tts_{config.tts_engine}_{config.version_id}" if config.version_id else work / f"tts_{config.tts_engine}"
     clips: List[Path] = []
