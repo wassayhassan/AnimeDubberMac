@@ -186,6 +186,7 @@ if [[ "$INSTALL" -eq 1 ]]; then
   if [[ -e "$TARGET" ]]; then mv "$TARGET" "$BACKUP"; fi
   if mv "$STAGED" "$TARGET"; then
     if [[ -e "$BACKUP" ]]; then rm -rf "$BACKUP"; fi
+    if [[ "$TARGET" != "$APP" ]]; then rm -rf "$APP"; fi
     echo "Updated: $TARGET"
   else
     if [[ -e "$BACKUP" ]]; then mv "$BACKUP" "$TARGET"; fi

@@ -67,6 +67,9 @@ To rebuild only the native app:
 /bin/zsh macos/package_app.sh --install
 ```
 
+Installing removes the temporary app bundle from `dist` after the install succeeds.
+Run `macos/package_app.sh` without `--install` if you want an app bundle in `dist`.
+
 To build, install, and immediately open it:
 
 ```bash
