@@ -33,7 +33,7 @@ _STAGE_PATTERNS = [
     ("translating", ("Translating", "translation LLM", "Whisper translation")),
     ("analyzing_characters", ("Analyzing characters", "speaker", "Character map")),
     ("synthesizing", ("Generating English voice", "Generating dub voice", "Synthesizing", "TTS")),
-    ("mixing", ("Rendering English", "Restoring original", "Mixing English", "Mixing dub")),
+    ("mixing", ("Rendering English", "Restoring original", "Mixing English", "Mixing dub", "Checking voice clips", "Rendering dub timeline", "Preparing music and effects", "Combining dub timeline", "Combining music and effects")),
     ("exporting", ("Creating final", "mux")),
 ]
 
@@ -83,5 +83,14 @@ def progress_to_event(message: str, job_id: str) -> AppEvent:
         done = int(voice_match.group(1))
         total = max(1, int(voice_match.group(2)))
         data.update({"stage": "synthesizing", "completed": done, "total": total, "fraction": done / total})
+
+    step_match = re.search(
+        r"(?:Checking voice clips|Rendering dub timeline|Preparing music and effects):\s*(\d+)\s*/\s*(\d+)",
+        last_line, re.I,
+    )
+    if step_match:
+        done = int(step_match.group(1))
+        total = max(1, int(step_match.group(2)))
+        data.update({"stage": "mixing", "completed": done, "total": total, "fraction": done / total})
 
     return AppEvent("stage", data, job_id)
