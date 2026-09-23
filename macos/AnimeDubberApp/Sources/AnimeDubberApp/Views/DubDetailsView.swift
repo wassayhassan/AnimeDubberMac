@@ -5,6 +5,7 @@ struct DubDetailsView: View {
     @EnvironmentObject private var state: AppState
     let dubID: String
     @State private var player: AVPlayer?
+    @State private var sourceCuePlayer: AVPlayer?
     @State private var confirmDelete = false
     @State private var advancedExpanded = false
     @State private var voiceAssignments: [String] = []
@@ -14,6 +15,8 @@ struct DubDetailsView: View {
 
     private struct ReviewCue: Identifiable {
         let id: Int
+        let start: Double
+        let end: Double
         let source: String
         let translation: String
         let suggestion: String
@@ -101,9 +104,29 @@ struct DubDetailsView: View {
                                         }
                                         Text(cue.source).textSelection(.enabled)
                                         Text("Current: \(cue.translation)").font(.callout)
+                                        if cue.end > cue.start,
+                                           let source = dub.artifacts["source_video"],
+                                           FileManager.default.fileExists(atPath: source) {
+                                            Button("Play original cue", systemImage: "play.circle") {
+                                                let item = AVPlayerItem(url: URL(fileURLWithPath: source))
+                                                item.forwardPlaybackEndTime = CMTime(seconds: cue.end + 0.5,
+                                                                                     preferredTimescale: 600)
+                                                sourceCuePlayer?.pause()
+                                                let playback = AVPlayer(playerItem: item)
+                                                sourceCuePlayer = playback
+                                                playback.seek(to: CMTime(seconds: max(0, cue.start - 0.25),
+                                                                         preferredTimescale: 600)) { _ in
+                                                    playback.play()
+                                                }
+                                            }.buttonStyle(.link)
+                                        }
                                         if !cue.error.isEmpty { Text(cue.error).font(.caption).foregroundStyle(.orange) }
                                         if !cue.alternate.isEmpty {
                                             Text("Alternate transcription (unverified): \(cue.alternate)")
+                                                .font(.caption).foregroundStyle(.orange)
+                                        }
+                                        if cue.reasons.contains("non_chinese_source") {
+                                            Text("The source transcript may be wrong. Listen to this cue in the original video before choosing the English line; the alternate transcript is only a clue.")
                                                 .font(.caption).foregroundStyle(.orange)
                                         }
                                         TextField("Approved translation", text: Binding(
@@ -224,7 +247,7 @@ struct DubDetailsView: View {
                 .onChange(of: dub.updatedAt) { _, _ in
                     if let updated = self.dub, updated.status == "paused" { loadReview(updated) }
                 }
-                .onDisappear { player?.pause() }
+                .onDisappear { player?.pause(); sourceCuePlayer?.pause() }
             } else {
                 ContentUnavailableView("Dub Not Found", systemImage: "waveform", description: Text("Select a dub in the sidebar."))
             }
@@ -280,7 +303,9 @@ struct DubDetailsView: View {
         reviewCues = flags.compactMap { row in
             guard let cue = row["cue"] as? Int, selected.contains(cue) else { return nil }
             let issue = timing[String(cue)] ?? [:]
-            return ReviewCue(id: cue, source: row["source"] as? String ?? "",
+            return ReviewCue(id: cue, start: row["start"] as? Double ?? 0,
+                             end: row["end"] as? Double ?? 0,
+                             source: row["source"] as? String ?? "",
                              translation: row["translation"] as? String ?? "",
                              suggestion: row["suggestion"] as? String ?? "",
                              alternate: row["asr_candidate"] as? String ?? "",
