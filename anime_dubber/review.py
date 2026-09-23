@@ -155,7 +155,7 @@ def review_subtitles(
                             "source": a["text"],
                             "translation": issue.get("attempted_translation", b["text"]) if issue else b["text"],
                             "reasons": reasons,
-                            **{key: row[key] for key in ("suggestion", "asr_candidate", "review_error")
+                            **{key: row[key] for key in ("suggestion", "asr_candidate", "asr_translation", "review_error")
                                if row.get(key) and (not issue or row.get("translation") == issue.get("attempted_translation"))}})
     # Speed alone is common in short anime subtitle cues. Prioritize obvious
     # language errors and the worst timing cases for expensive model calls.
@@ -201,7 +201,10 @@ def review_subtitles(
     if model:
         from mlx_lm import generate, load
         pending = [row for row in selected if (focus_cues is None or row["cue"] in focus_cues)
-                   and not row.get("suggestion")]
+                   and (not row.get("suggestion") or
+                        ("non_chinese_source" in row["reasons"] and
+                         HAN.search(row.get("asr_candidate", "")) and
+                         not row.get("asr_translation")))]
         if pending:
             load_start = time.monotonic()
             progress(f"Loading selective review model: {model}")
@@ -210,6 +213,36 @@ def review_subtitles(
             generation_start = time.monotonic()
             glossary_text = glossary_string(glossary)
             for n, row in enumerate(pending, 1):
+                if ("non_chinese_source" in row["reasons"] and
+                        HAN.search(row.get("asr_candidate", "")) and
+                        not row.get("asr_translation")):
+                    # Translate the alternate independently, without the original
+                    # English guess to anchor the model to a suspect transcript.
+                    alternate_prompt = (
+                        f"Translate this tentative Mandarin transcription into {language}. "
+                        "Return only the translation in one short line, with no notes. "
+                        "The transcription may be wrong, so do not add context.\n"
+                        f"Mandarin: {row['asr_candidate']}"
+                    )
+                    if getattr(tokenizer, "chat_template", None) is not None:
+                        try:
+                            alternate_prompt = tokenizer.apply_chat_template(
+                                [{"role": "user", "content": alternate_prompt}],
+                                add_generation_prompt=True, enable_thinking=False)
+                        except TypeError:
+                            alternate_prompt = tokenizer.apply_chat_template(
+                                [{"role": "user", "content": alternate_prompt}], add_generation_prompt=True)
+                    alternate_text = _response_text(generate(llm, tokenizer, prompt=alternate_prompt,
+                                                             max_tokens=128, verbose=False)).strip()
+                    alternate_text = re.sub(r"^```[^\n]*\n|\n```$", "", alternate_text).strip().strip('"')
+                    if (alternate_text and len(alternate_text.splitlines()) == 1
+                            and len(alternate_text) <= 200 and
+                            not alternate_text.startswith(("{", "[", "<")) and
+                            not (language == "en" and HAN.search(alternate_text))):
+                        row["asr_translation"] = alternate_text
+                        _atomic_json_write(report_path, result)
+                if row.get("suggestion"):
+                    continue
                 idx = row["cue"] - 1
                 issue = timing_issues.get(row["cue"])
                 if issue and issue.get("duration") and issue.get("available"):
@@ -289,6 +322,9 @@ def review_subtitles(
                         suggestion = retry
                 if suggestion:
                     row["suggestion"] = suggestion
+                    row.pop("review_error", None)
+                elif row.get("asr_translation") and row["asr_translation"].casefold() != row["translation"].casefold():
+                    row["suggestion"] = row["asr_translation"]
                     row.pop("review_error", None)
                 else:
                     row["review_error"] = (
