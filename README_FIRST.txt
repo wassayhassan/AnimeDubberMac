@@ -2,7 +2,7 @@ AnimeDubber v4 alpha
 
 macOS:
   1. /bin/zsh setup.sh
-  2. Open ~/Applications/AnimeDubber.app
+  2. Open /Applications/AnimeDubber.app
 
 Rebuild the native app:
   /bin/zsh macos/package_app.sh --install
