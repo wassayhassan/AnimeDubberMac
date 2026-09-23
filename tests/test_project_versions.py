@@ -95,6 +95,32 @@ class ProjectVersionsTests(unittest.TestCase):
             self.assertEqual(calls, [dub_id, dub_id])
             self.assertEqual(len(service.get_project(temp, project["project_id"])["dubs"]), 1)
 
+    def test_sync_job_cannot_overwrite_an_active_project(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = ApplicationService()
+            started = threading.Event()
+            release = threading.Event()
+
+            def pipeline(config, progress, runner):
+                started.set()
+                self.assertTrue(release.wait(3))
+                return {}
+
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=pipeline):
+                job_id = service.start_job({"source": "source.mp4", "output_dir": temp})
+                try:
+                    self.assertTrue(started.wait(2))
+                    with self.assertRaisesRegex(ValueError, "already running"):
+                        service.run_sync({"source": "source.mp4", "output_dir": temp})
+                    self.assertEqual(len(service.list_projects(temp)[0]["dubs"]), 1)
+                finally:
+                    release.set()
+                for _ in range(100):
+                    if service.get_job(job_id)["status"] == "completed":
+                        break
+                    time.sleep(.01)
+                self.assertEqual(service.get_job(job_id)["status"], "completed")
+
     def test_old_english_translation_cache_is_reused_without_loading_model(self):
         with tempfile.TemporaryDirectory() as temp:
             config = Config(source="source.mp4", output_dir=Path(temp), translation="llm")
@@ -142,6 +168,35 @@ class ProjectVersionsTests(unittest.TestCase):
             self.assertFalse(first_video.exists())
             self.assertTrue(second_video.exists())
             self.assertEqual(len(service.get_project(str(output), project["project_id"])["dubs"]), 1)
+            service.delete_dub(str(output), project["project_id"], second["id"])
+            final = service.get_project(str(output), project["project_id"])
+            self.assertNotIn("dubbed_video", final["artifacts"])
+            self.assertNotIn("translated_srt", final["artifacts"])
+
+    def test_deleting_latest_dub_restores_previous_output_links(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = ApplicationService()
+            project = service.create_project(temp, "source.mp4", "Episode", "saved-series")
+
+            def fake_pipeline(config, progress, runner):
+                self.assertEqual(config.series_id, "saved-series")
+                folder = Path(temp) / "versions" / config.version_id
+                folder.mkdir(parents=True)
+                video = folder / "final.mp4"
+                video.write_bytes(b"video")
+                runner.artifact("dubbed_video", video, "en")
+                return {"dubbed_video": video}
+
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=fake_pipeline):
+                service.run_sync({"source": "source.mp4", "output_dir": temp})
+                service.run_sync({"source": "source.mp4", "output_dir": temp})
+            before = service.get_project(temp, project["project_id"])
+            first, second = before["dubs"]
+            self.assertEqual(before["series_id"], "saved-series")
+            self.assertEqual(before["artifacts"]["dubbed_video"], second["artifacts"]["dubbed_video"])
+            service.delete_dub(temp, project["project_id"], second["id"])
+            after = service.get_project(temp, project["project_id"])
+            self.assertEqual(after["artifacts"]["dubbed_video"], first["artifacts"]["dubbed_video"])
 
     def test_srt_and_vtt_are_published_before_voice_generation(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -170,6 +225,34 @@ class ProjectVersionsTests(unittest.TestCase):
             self.assertIn("WEBVTT", results["translated_vtt"].read_text())
             self.assertIn("Hello", results["translated_srt"].read_text())
             self.assertEqual(results["translated_srt"].parent.name, "sub_test")
+
+    def test_translated_subtitles_survive_character_analysis_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            video = output / "source.mp4"
+            video.write_bytes(b"video")
+            audio = output / "audio.wav"
+            audio.write_bytes(b"audio")
+            service = ApplicationService()
+            project = service.create_project(temp, str(video))
+
+            def translation(segments, *_args):
+                segments[0].translated = "Hello"
+                return segments
+
+            with patch("anime_dubber.core.extract_audio", return_value=audio), \
+                 patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
+                 patch("anime_dubber.core.transcribe_audio", return_value=[Segment(0, 1, "你好")]), \
+                 patch("anime_dubber.core.translate_with_llm", side_effect=translation), \
+                 patch("anime_dubber.characters.analyze_characters", side_effect=RuntimeError("speaker model failed")):
+                with self.assertRaisesRegex(RuntimeError, "speaker model failed"):
+                    service.run_sync({"source": str(video), "output_dir": temp,
+                                      "translation": "llm", "tts_engine": "chatterbox"})
+
+            dub = service.get_project(temp, project["project_id"])["dubs"][0]
+            self.assertEqual(dub["status"], "failed")
+            self.assertIn("Hello", Path(dub["artifacts"]["translated_srt"]).read_text(encoding="utf-8"))
+            self.assertTrue(Path(dub["artifacts"]["translated_vtt"]).exists())
 
     def test_non_english_voice_constraints_are_explicit(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -308,6 +308,9 @@ class ApplicationService:
 
     def start_job(self, payload: Dict[str, Any], *, analysis: bool = False) -> str:
         config = config_from_dict(payload)
+        store = ProjectStore(config.output_dir, config.source)
+        if not config.series_id:
+            config.series_id = str(store.load().get("series_id") or "")
         if config.target_language != "en" and config.translation == "whisper":
             raise ValueError("Whisper direct translation only supports English. Choose LLM or Ollama.")
         if config.mode == "dub" and config.target_language != "en":
@@ -322,7 +325,6 @@ class ApplicationService:
             config=self._normalized_config_dict(config),
         )
         record.runner = CommandRunner()
-        store = ProjectStore(config.output_dir, config.source)
         with self._lock:
             self._check_external_job(store.load())
             if any(s.project_id == store.project_id and s.output_dir == store.output_dir
@@ -345,6 +347,9 @@ class ApplicationService:
 
     def run_sync(self, payload: Dict[str, Any], *, analysis: bool = False) -> dict:
         config = config_from_dict(payload)
+        store = ProjectStore(config.output_dir, config.source)
+        if not config.series_id:
+            config.series_id = str(store.load().get("series_id") or "")
         if config.target_language != "en" and config.translation == "whisper":
             raise ValueError("Whisper direct translation only supports English. Choose LLM or Ollama.")
         if config.mode == "dub" and config.target_language != "en":
@@ -358,10 +363,14 @@ class ApplicationService:
             kind="analyze" if analysis else "run",
             config=self._normalized_config_dict(config),
         )
-        store = ProjectStore(config.output_dir, config.source)
-        store.begin(job_id=job_id, kind=record.kind, config=record.config,
-                    dub_id=dub_id, name=str(payload.get("dub_name") or ""))
         with self._lock:
+            self._check_external_job(store.load())
+            if any(s.project_id == store.project_id and s.output_dir == store.output_dir
+                   and self._jobs[j].status in {"queued", "running"}
+                   for j, s in self._project_stores.items()):
+                raise ValueError("A job is already running for this project")
+            store.begin(job_id=job_id, kind=record.kind, config=record.config,
+                        dub_id=dub_id, name=str(payload.get("dub_name") or ""))
             self._jobs[job_id] = record
             self._project_stores[job_id] = store
         self._execute(record, config, analysis)
@@ -563,8 +572,12 @@ class ApplicationService:
             raise ValueError("Invalid project ID")
         store.project_id = project_id
         store.manifest_path = store.root / "projects" / f"{project_id}.json"
-        if not store.load():
+        project = store.load()
+        if not project:
             raise FileNotFoundError(project_id)
+        if project.get("status") == "running":
+            self._check_external_job(project)
+            raise ValueError("Stop the active project job before deleting a dub")
         return store.delete_dub(dub_id)
 
     def get_project(self, output_dir: str, project_id: str) -> dict:
