@@ -131,7 +131,7 @@ struct NewDubView: View {
                     settingRow("Source voices") {
                         Toggle("Choose character voice clips automatically", isOn: $state.autoSourceVoices)
                     }
-                    Text("Analyze Characters first to listen to the selected clips and change any match before generating a dub. Unclear voices use the default voice.")
+                    Text("Analyze Characters first to check each source clip. A character without a usable clip gets a Kokoro or macOS voice; source identity and child-like tone cannot be guaranteed without a clean reference.")
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

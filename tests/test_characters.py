@@ -29,7 +29,10 @@ class CharacterLogicTests(unittest.TestCase):
         self.assertEqual(_chatterbox_reference(profile, config), "/chosen.wav")
         profile["reference_audio"] = ""
         config.chatterbox_reference_audio = "/global.wav"
-        self.assertEqual(_chatterbox_reference(profile, config), "/global.wav")
+        self.assertEqual(_chatterbox_reference(profile, config), "/auto/character.wav")
+        profile["suggested_reference_audio"] = ""
+        self.assertEqual(_chatterbox_reference(profile, config), "")
+        self.assertEqual(_chatterbox_reference({}, config), "/global.wav")
         config.chatterbox_reference_audio = ""
         profile["auto_reference_enabled"] = False
         self.assertEqual(_chatterbox_reference(profile, config), "")

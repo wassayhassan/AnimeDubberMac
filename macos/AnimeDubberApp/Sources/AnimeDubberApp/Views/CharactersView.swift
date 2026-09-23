@@ -258,7 +258,7 @@ private struct CharacterInspector: View {
                                     }
                                 }
                             } else {
-                                Text("No clean source voice clip was found. The default voice will be used unless you choose a clip.")
+                                Text("No clean source voice clip was found. Dubbing uses a character voice from Kokoro or macOS unless you choose a clip.")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             LabeledContent("Reference clip") {
@@ -285,7 +285,7 @@ private struct CharacterInspector: View {
                                 }
                             }
 
-                            Text("A manually chosen reference takes priority over the default and auto-selected clips. Save changes before generating a dub.")
+                            Text("A manually chosen reference takes priority over the auto-selected source clip. The project-wide reference is a fallback for lines without an assigned character. Save changes before generating a dub.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

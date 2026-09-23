@@ -93,6 +93,19 @@ class ApplicationServiceTests(unittest.TestCase):
         self.assertEqual(event.data["total"], 100)
         self.assertAlmostEqual(event.data["fraction"], 0.25)
 
+    def test_unreferenced_character_preview_uses_character_voice(self):
+        service = ApplicationService()
+        with patch("anime_dubber.providers.tts.kokoro_available", return_value=True), \
+             patch("anime_dubber.providers.tts.synthesize_kokoro",
+                   side_effect=lambda _text, path, **_kw: path.write_bytes(b"preview")) as synthesize:
+            preview = service.preview_voice({
+                "provider": "chatterbox", "character_id": "CHAR_001", "reference_audio": "",
+                "voice_class": "female", "age_group": "child", "kokoro_voice": "auto",
+            })
+        self.assertEqual(preview["provider"], "kokoro")
+        self.assertEqual(synthesize.call_args.kwargs["voice"], "af_heart")
+        Path(preview["path"]).unlink(missing_ok=True)
+
     def test_post_voice_steps_report_their_own_progress(self):
         for title in ("Checking voice clips", "Rendering dub timeline", "Preparing music and effects"):
             with self.subTest(title=title):
