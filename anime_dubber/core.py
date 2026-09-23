@@ -1354,6 +1354,14 @@ def prepare_tts_clip(
             else:
                 resolved_tts = "elevenlabs"
 
+    if resolved_tts == "chatterbox" and chatterbox_reference:
+        from .providers.tts import MIN_CHATTERBOX_REFERENCE_SECONDS, reference_audio_duration
+        ref_seconds = reference_audio_duration(chatterbox_reference)
+        if ref_seconds < MIN_CHATTERBOX_REFERENCE_SECONDS:
+            progress(f"Warning: source voice reference for {seg.speaker_id or 'line ' + str(index + 1)} "
+                     f"is {ref_seconds:.2f}s; Chatterbox needs more than 5s. Using a selected voice.")
+            chatterbox_reference = ""
+
     if resolved_tts == "chatterbox" and config.multi_character and profile and not chatterbox_reference:
         resolved_tts = _character_voice_fallback()
         progress(f"No source voice reference for {seg.speaker_id}; using {resolved_tts} character voice")

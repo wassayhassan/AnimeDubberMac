@@ -136,7 +136,7 @@ Kokoro
 macOS / Piper / ElevenLabs fallback
 ```
 
-When English dubbing uses Chatterbox and speaker detection is enabled, **Choose character voice clips automatically** extracts short, isolated source dialogue for each character. Run **Analyze Characters** first to listen to each chosen clip in **Characters → English Voice** and replace or disable a bad match before generating the dub. A character without enough clean speech uses the configured default voice. A manually chosen character reference takes priority, followed by the global Chatterbox reference, then the automatic clip. The selected clips and timestamps remain in the project work folder and character map for later review and resume. Use `--no-auto-source-voices` to disable this from the CLI.
+When English dubbing uses Chatterbox and speaker detection is enabled, **Choose character voice clips automatically** combines at least 5.25 seconds of isolated source dialogue for each character. Run **Analyze Characters** first to listen to each chosen clip in **Characters → English Voice** and replace or disable a bad match before generating the dub. A character without enough clean speech uses a Kokoro or macOS character voice. A manually chosen character reference takes priority, followed by the global Chatterbox reference, then the automatic clip. References shorter than 5.25 seconds fall back to a character voice instead of stopping the dub. The selected clips and timestamps remain in the project work folder and character map for later review and resume. Use `--no-auto-source-voices` to disable this from the CLI.
 
 ## CLI
 

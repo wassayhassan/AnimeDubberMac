@@ -1,8 +1,10 @@
 import math
+import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -123,6 +125,25 @@ class CharacterIntegrationTests(unittest.TestCase):
             _choose_voice_references(vocals, segments, profiles, root, CommandRunner(), lambda _: None)
             self.assertTrue(all(not p.suggested_reference_audio for p in profiles))
 
+    def test_four_second_isolated_speech_falls_back_before_chatterbox(self):
+        import soundfile as sf
+        from anime_dubber.characters import CharacterProfile, _choose_voice_references
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            vocals = root / "voice.wav"
+            t = np.arange(16000 * 4, dtype=np.float32) / 16000
+            sf.write(vocals, .2 * np.sin(2 * np.pi * 140 * t), 16000)
+            profile = CharacterProfile(id="CHAR_001", display_name="Speaker", role="lead",
+                                       voice_class="male")
+            _choose_voice_references(vocals, [Segment(0, 4, "你好", speaker_id="CHAR_001")],
+                                     [profile], root, CommandRunner(), lambda _: None)
+            self.assertFalse(profile.suggested_reference_audio)
+
+            from anime_dubber.providers.tts import synthesize_chatterbox
+            with patch("anime_dubber.providers.tts.chatterbox_available", return_value=True):
+                with self.assertRaisesRegex(RuntimeError, "more than 5 seconds"):
+                    synthesize_chatterbox("Hello", root / "output.wav", reference_audio=str(vocals))
+
     def test_cached_speaker_analysis_can_add_references_later(self):
         import soundfile as sf
         with tempfile.TemporaryDirectory() as td:
@@ -140,7 +161,17 @@ class CharacterIntegrationTests(unittest.TestCase):
             second, _ = analyze_characters(vocals, segments, root / "work", root,
                                            CommandRunner(), lambda _: None,
                                            make_voice_references=True, **options)
-            self.assertTrue(Path(second[0].suggested_reference_audio).exists())
+            self.assertFalse(second[0].suggested_reference_audio)
+            cache = root / "work" / "character_analysis.json"
+            old = json.loads(cache.read_text(encoding="utf-8"))
+            old["reference_version"] = 1
+            old["characters"][0]["suggested_reference_audio"] = str(vocals)
+            cache.write_text(json.dumps(old), encoding="utf-8")
+            updated, payload = analyze_characters(vocals, segments, root / "work", root,
+                                                  CommandRunner(), lambda _: None,
+                                                  make_voice_references=True, **options)
+            self.assertEqual(payload["reference_version"], 2)
+            self.assertFalse(updated[0].suggested_reference_audio)
 
     def test_full_character_analysis_on_synthetic_audio(self):
         try:
