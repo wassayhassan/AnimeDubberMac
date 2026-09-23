@@ -115,6 +115,14 @@ struct SettingsView: View {
                             .frame(width: 160)
                     }
                 }
+                if state.asrProvider != .fasterWhisper {
+                    Picker("MLX Whisper model", selection: $state.mlxWhisperModel) {
+                        Text("Large v3 Turbo · faster").tag("mlx-community/whisper-large-v3-turbo")
+                        Text("Large v3 · stronger").tag("mlx-community/whisper-large-v3-mlx")
+                    }
+                    TextField("MLX Whisper model ID", text: $state.mlxWhisperModel)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
 
             Section("Translation") {
@@ -135,6 +143,26 @@ struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 220)
                     }
+                }
+                if state.translationProvider == .llm || state.translationProvider == .auto {
+                    Picker("Local translation model", selection: $state.llmModel) {
+                        Text("Qwen3 4B · faster").tag("mlx-community/Qwen3-4B-Instruct-2507-4bit")
+                        Text("Qwen3 8B · stronger").tag("mlx-community/Qwen3-8B-4bit")
+                        Text("Qwen3.5 9B · experimental").tag("mlx-community/Qwen3.5-9B-MLX-4bit")
+                        Text("Qwen3 14B · high memory").tag("mlx-community/Qwen3-14B-4bit")
+                    }
+                    TextField("MLX model ID", text: $state.llmModel)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Toggle("Review flagged lines before dubbing", isOn: $state.reviewBeforeDub)
+                if state.reviewBeforeDub {
+                    Picker("Review model", selection: $state.reviewModel) {
+                        Text("Qwen3 8B").tag("mlx-community/Qwen3-8B-4bit")
+                        Text("Qwen3.5 9B · experimental").tag("mlx-community/Qwen3.5-9B-MLX-4bit")
+                        Text("Qwen3 14B · high memory").tag("mlx-community/Qwen3-14B-4bit")
+                    }
+                    TextField("Review model ID", text: $state.reviewModel)
+                        .textFieldStyle(.roundedBorder)
                 }
             }
 

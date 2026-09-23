@@ -5,10 +5,13 @@ struct AppPreferences: Codable, Equatable {
     var seriesID = "10000-years-cultivation"
     var outputMode = OutputMode.dub.rawValue
     var asrProvider = ASRProvider.auto.rawValue
+    var mlxWhisperModel: String? = "mlx-community/whisper-large-v3-turbo"
     var fasterWhisperModel = "large-v3"
     var fasterWhisperDevice = "auto"
     var fasterWhisperComputeType = "auto"
     var translationProvider = TranslationProvider.llm.rawValue
+    var llmModel: String? = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    var reviewModel: String? = "mlx-community/Qwen3-8B-4bit"
     var ollamaURL = "http://127.0.0.1:11434"
     var ollamaModel = "qwen3:4b"
 
@@ -79,10 +82,13 @@ struct SettingsSnapshot: Equatable {
     let seriesID: String
     let outputMode: OutputMode
     let asrProvider: ASRProvider
+    let mlxWhisperModel: String
     let fasterWhisperModel: String
     let fasterWhisperDevice: String
     let fasterWhisperComputeType: String
     let translationProvider: TranslationProvider
+    let llmModel: String
+    let reviewModel: String
     let ollamaURL: String
     let ollamaModel: String
     let voiceProvider: VoiceProvider

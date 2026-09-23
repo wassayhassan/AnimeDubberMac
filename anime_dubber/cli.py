@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
             help="Speech recognition backend. auto uses MLX on Apple silicon, Faster-Whisper elsewhere.",
         )
         p.add_argument("--faster-whisper-model", default="large-v3")
+        p.add_argument("--mlx-whisper-model", default="mlx-community/whisper-large-v3-turbo")
         p.add_argument("--faster-whisper-device", default="auto", help="auto, cpu, or cuda")
         p.add_argument("--faster-whisper-compute-type", default="auto")
         p.add_argument(
@@ -45,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         p.add_argument("--ollama-url", default="http://127.0.0.1:11434")
         p.add_argument("--ollama-model", default="qwen3:4b")
+        p.add_argument("--llm-model", default="mlx-community/Qwen3-4B-Instruct-2507-4bit")
         p.add_argument(
             "--tts",
             choices=["auto", "chatterbox", "kokoro", "macos", "piper", "elevenlabs"],
@@ -117,6 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--asr-model", default="mlx-community/whisper-large-v3-mlx")
     review.add_argument("--sample-seconds", type=float, default=0, help="Limit expensive checks to flagged cues beginning in the first N seconds (300 = five minutes)")
     review.add_argument("--max-lines", type=int, default=0, help="Review up to this many flagged cues to benchmark before a full review")
+    review.add_argument("--cue", type=int, action="append", help="Run the stronger checks only on this 1-based cue; repeat for more cues")
 
     return parser
 
@@ -131,12 +134,14 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "mode": "subtitles" if getattr(args, "subtitles_only", False) else "dub",
         "asr": {
             "provider": args.asr,
+            "mlx_model": args.mlx_whisper_model,
             "model": args.faster_whisper_model,
             "device": args.faster_whisper_device,
             "compute_type": args.faster_whisper_compute_type,
         },
         "translation": {
             "provider": args.translation,
+            "llm_model": args.llm_model,
             "ollama_url": args.ollama_url,
             "model": args.ollama_model,
         },
@@ -240,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
                                       glossary=json.loads(args.glossary_json) if args.glossary_json else None,
                                       audio=args.audio, asr_model=args.asr_model,
                                       max_lines=args.max_lines, sample_seconds=args.sample_seconds,
+                                      focus_cues=set(args.cue) if args.cue else None,
                                       progress=lambda msg: print(msg, file=sys.stderr))
             print(json.dumps({"report": str(report_path), "total_cues": report["total_cues"],
                               "flagged_cues": report["flagged_cues"],

@@ -100,10 +100,12 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         mode=str(data.get("mode") or "dub"),
         target_language=target_language,
         asr_provider=asr_provider,
+        mlx_whisper_model=str(asr.get("mlx_model", data.get("mlx_whisper_model", "mlx-community/whisper-large-v3-turbo")) or "mlx-community/whisper-large-v3-turbo"),
         faster_whisper_model=str(asr.get("model", data.get("faster_whisper_model", "large-v3")) or "large-v3"),
         faster_whisper_device=str(asr.get("device", data.get("faster_whisper_device", "auto")) or "auto"),
         faster_whisper_compute_type=str(asr.get("compute_type", data.get("faster_whisper_compute_type", "auto")) or "auto"),
         translation=translation_provider,
+        llm_model=str(translation.get("llm_model", data.get("llm_model", "mlx-community/Qwen3-4B-Instruct-2507-4bit")) or "mlx-community/Qwen3-4B-Instruct-2507-4bit"),
         ollama_url=str(translation.get("ollama_url", data.get("ollama_url", "http://127.0.0.1:11434")) or "http://127.0.0.1:11434"),
         ollama_model=str(translation.get("model", data.get("ollama_model", "qwen3:4b")) or "qwen3:4b"),
         tts_engine=tts_provider,
@@ -450,7 +452,14 @@ class ApplicationService:
             if cue not in permitted or not isinstance(value, str) or not value.strip():
                 raise ValueError("Review revision must name a priority cue and contain text")
             cleaned[str(cue)] = value.strip()
+        for cue, issue in report.get("timing_issues", {}).items():
+            if cleaned.get(str(cue)) in {None, issue.get("attempted_translation")}:
+                raise ValueError(f"Line {cue} overlaps the next voice. Enter a shorter translation before continuing.")
         approval = path.with_name(path.name.replace(".review.json", ".review-approval.json"))
+        if approval.exists():
+            previous = json.loads(approval.read_text(encoding="utf-8"))
+            if previous.get("signature") == report["signature"]:
+                cleaned = {**previous.get("revisions", {}), **cleaned}
         _atomic_json_write(approval, {"signature": report["signature"], "revisions": cleaned})
         return {"approved": True, "revisions": len(cleaned), "path": str(approval)}
 
