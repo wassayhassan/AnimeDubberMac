@@ -1964,6 +1964,20 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     if config.target_language == "en":
         results["english_srt"] = en_srt
 
+    # Publish a fast, nonblocking quality report at the subtitle boundary.
+    # Stronger model suggestions can be added to this report later with the CLI
+    # without rerunning transcription, translation, or TTS.
+    from .review import review_subtitles
+    review_path = en_srt.with_suffix(".review.json")
+    try:
+        review = review_subtitles(zh_srt, en_srt, review_path, language=config.target_language,
+                                  progress=progress)
+        results["review_report"] = review_path
+        publish("review_report", review_path, config.target_language)
+        progress(f"Subtitle review: {review['flagged_cues']} cues flagged; report: {review_path}")
+    except (OSError, ValueError) as exc:
+        progress(f"Warning: subtitle review skipped: {exc}")
+
     if config.mode == "subtitles":
         progress(f"DONE: {en_srt}")
         return results

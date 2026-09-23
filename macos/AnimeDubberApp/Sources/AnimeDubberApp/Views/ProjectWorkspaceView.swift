@@ -96,7 +96,7 @@ struct ProjectWorkspaceView: View {
                             .font(.headline)
                         ForEach(set.artifacts.keys.sorted(), id: \.self) { kind in
                             if let path = set.artifacts[kind] {
-                                ArtifactLink(title: kind.replacingOccurrences(of: "_", with: " ").capitalized, path: path)
+                                ArtifactLink(title: kind == "review_report" ? "Subtitle Review Report" : kind.replacingOccurrences(of: "_", with: " ").capitalized, path: path)
                             }
                         }
                     }

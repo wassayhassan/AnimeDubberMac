@@ -96,6 +96,17 @@ def build_parser() -> argparse.ArgumentParser:
     retry.add_argument("--elevenlabs-api-key", default="")
     retry.add_argument("--json", action="store_true")
 
+    review = sub.add_parser("review-subtitles", help="Flag suspicious cues in an existing SRT pair and optionally propose fixes with a larger local model")
+    review.add_argument("source_srt", type=Path, help="Original-language SRT")
+    review.add_argument("translated_srt", type=Path, help="Translated SRT with matching cue numbers")
+    review.add_argument("-o", "--report", type=Path, default=None, help="JSON report path (defaults to translated SRT with .review.json suffix)")
+    review.add_argument("--target-language", choices=["en", "es", "fr", "de", "ja"], default="en")
+    review.add_argument("--model", default="", help="Optional MLX model for flagged cues, e.g. mlx-community/Qwen3-8B-4bit")
+    review.add_argument("--audio", type=Path, help="Optional extracted dialogue WAV for a second transcription of suspect source cues")
+    review.add_argument("--asr-model", default="mlx-community/whisper-large-v3-mlx")
+    review.add_argument("--sample-seconds", type=float, default=0, help="Limit expensive checks to flagged cues beginning in the first N seconds (300 = five minutes)")
+    review.add_argument("--max-lines", type=int, default=0, help="Review up to this many flagged cues to benchmark before a full review")
+
     return parser
 
 
@@ -206,6 +217,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "new-project":
         print(json.dumps(service.create_project(args.output, args.source, args.name, args.series_id), indent=2))
         return 0
+    if args.command == "review-subtitles":
+        from .review import review_subtitles
+        try:
+            report_path = args.report or args.translated_srt.with_suffix(".review.json")
+            report = review_subtitles(args.source_srt, args.translated_srt, report_path,
+                                      language=args.target_language, model=args.model,
+                                      audio=args.audio, asr_model=args.asr_model,
+                                      max_lines=args.max_lines, sample_seconds=args.sample_seconds,
+                                      progress=lambda msg: print(msg, file=sys.stderr))
+            print(json.dumps({"report": str(report_path), "total_cues": report["total_cues"],
+                              "flagged_cues": report["flagged_cues"],
+                              "sampled_cues": report["sampled_cues"],
+                              "timing_seconds": report["timing_seconds"]}, indent=2))
+            return 0
+        except KeyboardInterrupt:
+            print("Interrupted. Completed review suggestions are saved.", file=sys.stderr)
+            return 130
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
     if args.command == "resume-dub":
         try:
             job_id = service.resume_dub(args.output, args.project_id, args.dub_id,

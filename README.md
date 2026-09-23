@@ -288,3 +288,24 @@ python -m anime_dubber.cli resume-dub PROJECT_ID DUB_ID -o ~/Movies/AnimeDubber
 Each `run` creates a version. Its translated SRT/VTT appears under `versions/<version-id>/` before dubbing finishes. Non-English dub audio currently requires `--tts elevenlabs` and a multilingual ElevenLabs voice; for other languages without that provider, use `--subtitles-only`.
 
 Use **Pause** while a dub is processing, then **Resume This Dub** in Dub Details. Failed jobs can also be resumed there. Resume preserves the dub ID and completed source, subtitles, translation batches, and voice clips whose settings still match. The operation in progress may need to restart; a model call may finish before the pause takes effect. Restarting the app after a crash also leaves the interrupted dub available to resume. Keep the project's `.anime_dubber_work` directory to retain these checkpoints. For ElevenLabs dubs, re-enter the API key in Settings or pass `--elevenlabs-api-key` when resuming from CLI.
+
+### Selective subtitle review and Mac speed sample
+
+Run this after the Chinese and translated SRT files have appeared. It does not change the dub currently processing or overwrite the subtitles. The first pass only detects likely transcription, translation, and timing issues:
+
+```bash
+python -m anime_dubber.cli review-subtitles \
+  ~/Movies/AnimeDubber/VIDEO_ID_zh.srt \
+  ~/Movies/AnimeDubber/versions/DUB_ID/VIDEO_ID_en.srt
+```
+
+To measure the *additional* cost of the stronger translation review on your Mac, pause the dub or wait for it to finish before loading a second model on a 16 GB machine. Start with an 8B model that works with the app's existing `mlx-lm` dependency; test the first five minutes:
+
+```bash
+python -m anime_dubber.cli review-subtitles \
+  ~/Movies/AnimeDubber/VIDEO_ID_zh.srt \
+  ~/Movies/AnimeDubber/versions/DUB_ID/VIDEO_ID_en.srt \
+  --sample-seconds 300 --model mlx-community/Qwen3-8B-4bit
+```
+
+The command prints elapsed model-load and review time and saves a `.review.json` next to the translated SRT. On a subsequent invocation with the same inputs, completed suggestions are reused. Remove `--sample-seconds 300` to process remaining flagged cues. For a second transcription of suspicious source lines, add `--audio /path/to/extracted_dialogue.wav`; this loads the full Whisper Large v3 model and records its own timing. Use the separated dialogue WAV where possible. The alternate transcription and proposed translations are **unverified suggestions** in the report, not automatic changes to the existing SRT or dub. Model downloads are required on first use; this test measures incremental review cost, not the speed of full transcription or TTS.

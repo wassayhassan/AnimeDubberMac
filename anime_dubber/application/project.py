@@ -208,7 +208,7 @@ class ProjectStore:
             return
         path = str(path)
         payload.setdefault("artifacts", {})[kind] = path
-        if kind.endswith("_srt") or kind.endswith("_vtt"):
+        if kind.endswith("_srt") or kind.endswith("_vtt") or kind == "review_report":
             key = f"{version_id}:{language}" if version_id else language
             subtitle = payload.setdefault("subtitles", {}).setdefault(key, {
                 "language": language, "created_at": _now(), "artifacts": {},
