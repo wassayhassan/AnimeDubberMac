@@ -70,6 +70,50 @@ class ReviewTests(unittest.TestCase):
         self.assertFalse(usable_rewrite("The Tang Sect has 3 gates", "The Tang Sect has gates"))
         self.assertTrue(usable_rewrite("The Tang Sect has 3 gates", "Tang Sect: 3 gates"))
 
+    def test_timing_fallback_speeds_original_and_resumes_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            video = base / "source.mp4"; video.write_bytes(b"video")
+            audio = base / "audio.wav"; audio.write_bytes(b"audio")
+            cfg = Config(source=str(video), output_dir=base / "out", version_id="tempo",
+                         translation="llm", multi_character=False)
+            calls = []
+
+            def prepare(seg, *_args, **kwargs):
+                calls.append((seg.translated, kwargs.get("max_tempo", 1.0)))
+                if kwargs.get("max_tempo", 1.0) < 1.5:
+                    raise TimingOverlapError(0, 3.2, 2.8, seg.translated)
+                return audio
+
+            def transcribe(*_args, **_kwargs):
+                return [Segment(0, .5, "唐门")]
+
+            def translate(items, *_args):
+                items[0].translated = "The once famous Tang Sect"
+                return items
+
+            with patch("anime_dubber.core.download_source", return_value=video), \
+                 patch("anime_dubber.core.extract_audio", return_value=audio), \
+                 patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
+                 patch("anime_dubber.core.transcribe_audio", side_effect=transcribe), \
+                 patch("anime_dubber.core.translate_with_llm", side_effect=translate), \
+                 patch("anime_dubber.core.prepare_tts_clip", side_effect=prepare), \
+                 patch("anime_dubber.timing.TimingRewriter.candidate", return_value=None) as candidate, \
+                 patch("anime_dubber.core.ffprobe_duration", return_value=2.8), \
+                 patch("anime_dubber.core.render_dub_timeline", return_value=audio), \
+                 patch("anime_dubber.core.build_dialogue_safe_background", return_value=audio), \
+                 patch("anime_dubber.core.mix_background_and_dub", return_value=audio), \
+                 patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
+                result = run_pipeline(cfg, lambda _: None, CommandRunner())
+                run_pipeline(cfg, lambda _: None, CommandRunner())
+            self.assertEqual(candidate.call_count, 3)
+            self.assertEqual(calls, [("The once famous Tang Sect", 1.0),
+                                     ("The once famous Tang Sect", 1.5),
+                                     ("The once famous Tang Sect", 1.5)])
+            self.assertIn("The once famous Tang Sect", result["translated_srt"].read_text())
+            fixes = json.loads(next((base / "out" / "versions" / "tempo").glob("*.timing-fixes.json")).read_text())
+            self.assertEqual(fixes["1"]["max_tempo"], 1.5)
+
     def test_rewriter_requests_measured_gap_and_checks_candidate(self):
         prompts = []
         fake = type("FakeMLX", (), {
@@ -145,7 +189,7 @@ class ReviewTests(unittest.TestCase):
                 approval.write_text(json.dumps({"signature": flagged["signature"],
                                                 "revisions": {"1": "Hello"}}))
                 result = run_pipeline(cfg, lambda _: None, runner)
-            self.assertEqual(generated, ["A long greeting", "Hello"])
+            self.assertEqual(generated, ["A long greeting", "A long greeting", "Hello"])
             self.assertIn("Hello", result["translated_srt"].read_text())
 
     def test_flags_source_and_translation_without_changing_srt(self):

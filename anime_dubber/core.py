@@ -1298,6 +1298,7 @@ def prepare_tts_clip(
     progress: ProgressCallback,
     profile: Optional[dict] = None,
     next_start: Optional[float] = None,
+    max_tempo: float = 1.0,
 ) -> Path:
     text = (seg.translated or seg.text).strip()
     if not text:
@@ -1372,6 +1373,7 @@ def prepare_tts_clip(
 
     signature_data = {
         "processing_version": 3,
+        "max_tempo": round(max_tempo, 3),
         "next_start": round(next_start, 3) if next_start is not None else None,
         "text": text,
         "engine": resolved_tts,
@@ -1502,9 +1504,14 @@ def prepare_tts_clip(
     else:
         source_audio = speech_audio
     available = max(0.0, next_start - seg.start) if next_start is not None else None
+    tempo = 1.0
     if available is not None and source_dur > available + 0.03:
-        speech_audio.unlink(missing_ok=True)
-        raise TimingOverlapError(index, source_dur, available, text)
+        if max_tempo > 1.0 and available > 0:
+            tempo = min(max_tempo, 1.5, source_dur / max(0.001, available - 0.015))
+        if tempo <= 1.0 or source_dur / tempo > available + 0.03:
+            speech_audio.unlink(missing_ok=True)
+            raise TimingOverlapError(index, source_dur, available, text)
+        progress(f"Speeding line {index + 1} to {tempo:.2f}× to fit the next voice")
     if source_dur > seg.end - seg.start + 0.08:
         progress(f"Line {index + 1} speaks naturally {source_dur:.2f}s into the available gap")
     filters: List[str] = [
@@ -1515,6 +1522,8 @@ def prepare_tts_clip(
         "afade=t=in:st=0:d=0.012",
     ]
     filters.extend(_pitch_filters(pitch))
+    if tempo > 1.0:
+        filters.append(atempo_chain(tempo))
     if style == "shouting":
         filters += ["acompressor=threshold=0.125:ratio=3:attack=5:release=90"]
     elif style == "whispering":
@@ -1544,6 +1553,7 @@ def prepare_tts_clip(
             safe_filters = [
                 "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB",
                 "afade=t=in:st=0:d=0.012",
+                *([atempo_chain(tempo)] if tempo > 1.0 else []),
                 f"volume={max(0.1, min(3.0, gain)):.4f}",
                 f"aresample={SAMPLE_RATE}",
                 "aformat=sample_fmts=s16:channel_layouts=stereo",
@@ -2192,12 +2202,18 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         runner.check_cancel()
         profile = profile_map.get(seg.speaker_id, {}) if config.multi_character else {}
         next_start = segments[i + 1].start if i + 1 < total_lines else total_duration
+        saved_fix = timing_fixes.get(str(i + 1), {})
+        saved_tempo = (min(1.5, float(saved_fix.get("max_tempo", 1.0)))
+                       if isinstance(saved_fix, dict) and saved_fix.get("source") == seg.text
+                       and saved_fix.get("replacement") == seg.translated else 1.0)
         try:
             clips.append(prepare_tts_clip(seg, i, tts_dir, config, runner, progress,
-                                          profile=profile, next_start=next_start))
+                                          profile=profile, next_start=next_start,
+                                          **({"max_tempo": saved_tempo} if saved_tempo > 1.0 else {})))
         except TimingOverlapError as issue:
             original = seg.translated
             rejected = [original]
+            measured_options = [(original, issue.duration)]
             latest_issue = issue
             repair_errors = []
             repaired = False
@@ -2222,6 +2238,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                                             profile=profile, next_start=next_start)
                 except TimingOverlapError as measured:
                     latest_issue = measured
+                    measured_options.append((candidate, measured.duration))
                     continue
                 seg.translated = candidate
                 clips.append(clip)
@@ -2237,6 +2254,38 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                 progress(f"Automatically fitted line {i + 1}: {candidate}")
                 repaired = True
                 break
+            if not repaired:
+                # Use pitch-preserving tempo only after testing natural speech
+                # and shorter translations. Prefer original meaning if it fits.
+                for wording, duration in measured_options:
+                    if issue.available <= 0 or duration > issue.available * 1.5 + 0.03:
+                        continue
+                    runner.check_cancel()
+                    trial = Segment.from_dict(seg.to_dict())
+                    trial.translated = wording
+                    progress(f"Trying up to 1.5× voice speed for line {i + 1}: {wording}")
+                    try:
+                        clip = prepare_tts_clip(trial, i, tts_dir, config, runner, progress,
+                                                profile=profile, next_start=next_start,
+                                                max_tempo=1.5)
+                    except TimingOverlapError:
+                        continue
+                    seg.translated = wording
+                    clips.append(clip)
+                    timing_fixes[str(i + 1)] = {"source": seg.text, "original": original,
+                                                "replacement": wording,
+                                                "available": round(issue.available, 3),
+                                                "max_tempo": 1.5}
+                    _atomic_json_write(fixes_path, timing_fixes)
+                    publish("timing_fixes", fixes_path, config.target_language)
+                    if wording != original:
+                        write_srt(segments, en_srt, translated=True)
+                        write_vtt(segments, en_vtt, translated=True)
+                        publish("translated_srt", en_srt, config.target_language)
+                        publish("translated_vtt", en_vtt, config.target_language)
+                    progress(f"Automatically fitted line {i + 1} with capped voice speed")
+                    repaired = True
+                    break
             if repaired:
                 if timing_path.exists():
                     try:

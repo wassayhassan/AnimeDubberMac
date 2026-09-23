@@ -218,7 +218,7 @@ AnimeDubber retains the v3.4/v3.5 fixes:
 - duplicate micro-segments are collapsed;
 - zero-sample TTS clips are rejected;
 - TTS lead-in silence is trimmed;
-- lines that overrun the next voice get up to three shorter model rewrites, each measured with the selected voice; successful wording is saved with the subtitle version, while lines that still cannot fit pause for review;
+- lines that overrun the next voice get up to three shorter model rewrites, each measured with the selected voice; if none fits naturally, the app tries pitch-preserving speedup capped at 1.5× and pauses for review only if the voice still cannot fit;
 - untouched original soundtrack is preserved outside dialogue;
 - Demucs `no_vocals` is used only around detected source dialogue;
 - pre/post dialogue guards reduce source-voice bleed;
@@ -319,4 +319,4 @@ For a new dub on Apple silicon, enable **Review flagged lines before voices** in
 
 For headless jobs, inspect the `*.review.json` file, then run `python -m anime_dubber.cli approve-review PROJECT_ID DUB_ID -o OUTPUT_DIR` to keep the original lines, or pass `--revisions corrections.json` with a JSON object such as `{"199": "Approved line"}`. Finally run `python -m anime_dubber.cli resume-dub PROJECT_ID DUB_ID -o OUTPUT_DIR`. If a stronger model fails, the job still pauses with the saved original subtitles and a warning; you can approve the original text or edit it before continuing.
 
-Voice clips now play at their generated pace and may continue beyond the subtitle end if there is room before the next cue. If a clip would overlap the next cue or run past the video's end, the dub pauses at that cue, saves the completed clips, and asks for a shorter translation. On Apple silicon it requests a stronger-model suggestion for that cue; its proposed wording still needs your review and the new voice duration is checked again on resume. No speech is accelerated or cut to fit. Select full Whisper Large v3 and a larger translation model in New Dub, or supply model IDs in Settings. A model choice starts applying to a new dub; an existing rendered video keeps its audio.
+Voice clips play at their generated pace and may continue beyond the subtitle end if there is room before the next cue. When a clip would overlap the next voice or run past the video's end, the app first tries up to three shorter translations and measures each rendered voice. If they still cannot fit naturally, it tries pitch-preserving speedup up to 1.5×, measuring the final audio again. It pauses for review only when the voice still does not fit. Clips are never cut short. Select full Whisper Large v3 and a larger translation model in New Dub, or supply model IDs in Settings. A model choice starts applying to a new dub; an existing rendered video keeps its audio.
