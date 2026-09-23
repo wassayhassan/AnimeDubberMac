@@ -243,9 +243,8 @@ def synthesize_chatterbox(
 ) -> None:
     """Generate high-quality English speech with Chatterbox.
 
-    A reference clip is optional. When supplied, it is only used because the
-    user explicitly selected it; AnimeDubber never extracts/clones source voices
-    automatically.
+    A reference clip is optional. It can be selected by the user or extracted
+    from clean source dialogue during character analysis.
     """
     if not chatterbox_available():
         raise RuntimeError(

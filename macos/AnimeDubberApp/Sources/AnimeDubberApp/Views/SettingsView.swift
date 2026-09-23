@@ -199,7 +199,7 @@ struct SettingsView: View {
                             }
                         }
 
-                        Text("Reference audio is optional. AnimeDubber only uses clips you explicitly choose; use voices you have permission to clone.")
+                        Text("A default reference overrides automatic character clips. Clear it to use individually selected source voices when that option is enabled in New Dub.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

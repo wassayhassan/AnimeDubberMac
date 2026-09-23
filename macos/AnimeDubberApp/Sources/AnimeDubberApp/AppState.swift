@@ -28,6 +28,7 @@ final class AppState: ObservableObject {
     @Published var fallbackVoice = ""
     @Published var ttsRate = 210
     @Published var chatterboxReferenceAudio = ""
+    @Published var autoSourceVoices = true
     @Published var chatterboxExpressiveness = 0.5
     @Published var chatterboxDevice = "auto"
     @Published var chatterboxTurbo = true
@@ -55,6 +56,7 @@ final class AppState: ObservableObject {
     @Published var statusText = "Connecting to backend…"
     @Published var progressFraction: Double?
     @Published var activeJobID: String?
+    private var analyzingCurrentJob = false
     @Published var systemCheckItems: [SystemCheckItem] = []
     @Published var showingSystemCheck = false
 
@@ -107,6 +109,7 @@ final class AppState: ObservableObject {
             fallbackVoice: fallbackVoice,
             ttsRate: ttsRate,
             chatterboxReferenceAudio: chatterboxReferenceAudio,
+            autoSourceVoices: autoSourceVoices,
             chatterboxExpressiveness: chatterboxExpressiveness,
             chatterboxDevice: chatterboxDevice,
             chatterboxTurbo: chatterboxTurbo,
@@ -142,6 +145,7 @@ final class AppState: ObservableObject {
             fallbackVoice: fallbackVoice,
             ttsRate: ttsRate,
             chatterboxReferenceAudio: chatterboxReferenceAudio,
+            autoSourceVoices: autoSourceVoices,
             chatterboxExpressiveness: chatterboxExpressiveness,
             chatterboxDevice: chatterboxDevice,
             chatterboxTurbo: chatterboxTurbo,
@@ -193,6 +197,7 @@ final class AppState: ObservableObject {
         fallbackVoice = preferences.fallbackVoice
         ttsRate = preferences.ttsRate
         chatterboxReferenceAudio = preferences.chatterboxReferenceAudio
+        autoSourceVoices = preferences.autoSourceVoices ?? true
         chatterboxExpressiveness = preferences.chatterboxExpressiveness
         chatterboxDevice = preferences.chatterboxDevice
         chatterboxTurbo = preferences.chatterboxTurbo
@@ -287,6 +292,7 @@ final class AppState: ObservableObject {
                 "fallback_voice": fallbackVoice,
                 "rate": ttsRate,
                 "chatterbox_reference_audio": chatterboxReferenceAudio,
+                "auto_voice_references": autoSourceVoices,
                 "chatterbox_expressiveness": chatterboxExpressiveness,
                 "chatterbox_device": chatterboxDevice,
                 "chatterbox_turbo": chatterboxTurbo,
@@ -430,6 +436,7 @@ final class AppState: ObservableObject {
         ollamaURL = config["ollama_url"] as? String ?? ollamaURL
         fallbackVoice = config["voice"] as? String ?? fallbackVoice
         chatterboxReferenceAudio = config["chatterbox_reference_audio"] as? String ?? chatterboxReferenceAudio
+        autoSourceVoices = config["auto_voice_references"] as? Bool ?? autoSourceVoices
         chatterboxExpressiveness = (config["chatterbox_expressiveness"] as? NSNumber)?.doubleValue ?? chatterboxExpressiveness
         chatterboxTurbo = config["chatterbox_turbo"] as? Bool ?? chatterboxTurbo
         kokoroVoice = config["kokoro_voice"] as? String ?? kokoroVoice
@@ -535,7 +542,8 @@ final class AppState: ObservableObject {
             ? voiceProvider.rawValue
             : characterDraft.ttsProvider
         let reference = characterDraft.referenceAudio.isEmpty
-            ? chatterboxReferenceAudio
+            ? (chatterboxReferenceAudio.isEmpty && characterDraft.autoReferenceEnabled && autoSourceVoices
+               ? characterDraft.suggestedReferenceAudio : chatterboxReferenceAudio)
             : characterDraft.referenceAudio
         let selectedKokoro = characterDraft.kokoroVoice.isEmpty
             ? kokoroVoice
@@ -746,6 +754,9 @@ final class AppState: ObservableObject {
         let data = payload["data"] as? [String: Any] ?? [:]
 
         switch event {
+        case "job_started":
+            analyzingCurrentJob = data["kind"] as? String == "analyze"
+
         case "stage":
             let title = data["title"] as? String ?? "Working"
             statusText = title
@@ -777,11 +788,17 @@ final class AppState: ObservableObject {
 
         case "finished":
             let status = data["status"] as? String ?? "completed"
+            let showVoices = analyzingCurrentJob && status == "completed"
+            analyzingCurrentJob = false
             activeJobID = nil
             progressFraction = status == "completed" ? 1 : nil
             statusText = status == "completed" ? "Completed" : status.capitalized
             refreshProjects()
             refreshCharacterMaps()
+            if showVoices {
+                selection = .characters
+                statusText = "Review source voice clips before creating the dub"
+            }
 
         default:
             break

@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct CharactersView: View {
@@ -54,6 +55,17 @@ struct CharactersView: View {
                         }
                     }
                     .width(min: 120, ideal: 160)
+
+                    TableColumn("Source Voice") { character in
+                        if !character.referenceAudio.isEmpty {
+                            Label("Chosen clip", systemImage: "waveform")
+                        } else if character.autoReferenceEnabled && !character.suggestedReferenceAudio.isEmpty {
+                            Label("Auto-selected", systemImage: "waveform")
+                        } else {
+                            Text("Default voice").foregroundStyle(.secondary)
+                        }
+                    }
+                    .width(min: 125, ideal: 150)
 
                     TableColumn("Lines") { character in
                         Text("\(character.lineCount)")
@@ -129,6 +141,7 @@ struct CharactersView: View {
 
 private struct CharacterInspector: View {
     @EnvironmentObject private var state: AppState
+    @State private var sourcePlayer: AVPlayer?
 
     private let roles = ["lead", "major", "supporting", "minor"]
     private let voiceClasses = ["male", "female", "neutral"]
@@ -219,6 +232,35 @@ private struct CharacterInspector: View {
                         }
 
                         if usesChatterbox {
+                            if !state.characterDraft.suggestedReferenceAudio.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Toggle("Use automatically selected source voice", isOn: $state.characterDraft.autoReferenceEnabled)
+                                    if let character = state.characters.first(where: { $0.id == state.selectedCharacterID }) {
+                                        let windows = character.referenceTiming.compactMap { item -> String? in
+                                            guard item.count == 2 else { return nil }
+                                            return String(format: "%.1f–%.1f s", item[0], item[1])
+                                        }.joined(separator: ", ")
+                                        Text("Source dialogue: \(windows). Listen before dubbing; music or a mistaken speaker match can affect the voice.")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    HStack {
+                                        Button("Play Source Clip", systemImage: "play.fill") {
+                                            let url = URL(fileURLWithPath: state.characterDraft.suggestedReferenceAudio)
+                                            sourcePlayer?.pause()
+                                            sourcePlayer = AVPlayer(url: url)
+                                            sourcePlayer?.play()
+                                        }
+                                        Button("Show in Finder", systemImage: "folder") {
+                                            NSWorkspace.shared.activateFileViewerSelecting([
+                                                URL(fileURLWithPath: state.characterDraft.suggestedReferenceAudio)
+                                            ])
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text("No clean source voice clip was found. The default voice will be used unless you choose a clip.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             LabeledContent("Reference clip") {
                                 HStack {
                                     TextField("Optional audio clip", text: $state.characterDraft.referenceAudio)
@@ -243,7 +285,7 @@ private struct CharacterInspector: View {
                                 }
                             }
 
-                            Text("Reference audio is optional and is only used when you explicitly select it. Use a voice you have permission to clone.")
+                            Text("A manually chosen reference takes priority over the default and auto-selected clips. Save changes before generating a dub.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -340,6 +382,8 @@ private struct CharacterInspector: View {
             }
             .padding(18)
         }
+        .onDisappear { sourcePlayer?.pause() }
+        .onChange(of: state.selectedCharacterID) { _, _ in sourcePlayer?.pause() }
     }
 
     private var usesChatterbox: Bool {

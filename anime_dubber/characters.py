@@ -44,6 +44,10 @@ class CharacterProfile:
     macos_voice: str = ""
     kokoro_voice: str = "auto"
     reference_audio: str = ""
+    suggested_reference_audio: str = ""
+    auto_reference_enabled: bool = True
+    reference_quality: float = 0.0
+    reference_timing: List[List[float]] = field(default_factory=list)
     expressiveness: float = 0.5
     elevenlabs_voice_id: str = ""
     tts_rate: int = 205
@@ -120,15 +124,18 @@ def _normalize(v: np.ndarray) -> np.ndarray:
 
 
 def ensure_analysis_wav(vocals: Path, work_dir: Path, runner, resume: bool = True, force: bool = False) -> Path:
+    from .core import _atomic_media_run, _complete_wav, ffprobe_duration
+
     work_dir.mkdir(parents=True, exist_ok=True)
     out = work_dir / "speaker_analysis_16k_mono.wav"
-    if resume and out.exists() and out.stat().st_size > 1000 and not force:
+    minimum = ffprobe_duration(vocals, runner) * .98
+    if resume and _complete_wav(out, minimum_seconds=minimum) and not force:
         return out
-    runner.run([
+    _atomic_media_run(runner, [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(vocals), "-vn", "-ac", "1", "-ar", str(ANALYSIS_SR),
         "-c:a", "pcm_s16le", str(out),
-    ])
+    ], out)
     return out
 
 
@@ -441,13 +448,22 @@ def _load_json(path: Path, default):
         return default
 
 
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(path)
+
+
 def _apply_manual_overrides(profiles: List[CharacterProfile], override_path: Optional[Path]) -> None:
     if not override_path or not override_path.exists():
         return
     data = _load_json(override_path, {})
     items = data.get("characters", []) if isinstance(data, dict) else []
     by_id = {str(x.get("id")): x for x in items if isinstance(x, dict)}
-    editable = {"display_name", "role", "voice_class", "age_group", "macos_voice", "tts_rate", "pitch_semitones", "voice_gain", "notes"}
+    editable = {"display_name", "role", "voice_class", "age_group", "tts_provider", "macos_voice",
+                "kokoro_voice", "reference_audio", "auto_reference_enabled", "expressiveness",
+                "elevenlabs_voice_id", "tts_rate", "pitch_semitones", "voice_gain", "notes"}
     for p in profiles:
         old = by_id.get(p.id)
         if not old or not bool(old.get("manual")):
@@ -500,6 +516,9 @@ def _match_series_profiles(profiles: List[CharacterProfile], db_path: Optional[P
                 p.voice_class = best.voice_class
                 p.age_group = best.age_group
                 p.role = best.role
+                for key in ("tts_provider", "kokoro_voice", "reference_audio", "auto_reference_enabled",
+                            "expressiveness", "elevenlabs_voice_id", "notes"):
+                    setattr(p, key, getattr(best, key))
                 p.manual = True
             progress(f"Matched {p.id} to an existing series voice ({best_sim:.2f} similarity).")
         else:
@@ -518,7 +537,104 @@ def save_series_profiles(profiles: Sequence[CharacterProfile], db_path: Optional
         d["cumulative_seconds"] = float(old.get("cumulative_seconds", 0.0)) + p.speaking_seconds
         by_id[p.id] = d
     payload = {"version": 1, "characters": list(by_id.values())}
-    db_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json(db_path, payload)
+
+
+def _choose_voice_references(
+    analysis_wav: Path,
+    segments: Sequence,
+    profiles: Sequence[CharacterProfile],
+    work_dir: Path,
+    runner,
+    progress,
+    *,
+    features: Optional[Sequence[AudioFeatures]] = None,
+    embeddings: Optional[Sequence[Sequence[float]]] = None,
+) -> None:
+    """Make short speaker-specific Chatterbox prompts from isolated dialogue.
+
+    A questionable speaker or a video without clean speech stays on the default
+    voice. No clip is accepted solely because a speaker label exists.
+    """
+    import soundfile as sf
+
+    folder = work_dir / "voice_references"
+    folder.mkdir(parents=True, exist_ok=True)
+    with sf.SoundFile(str(analysis_wav), "r") as source:
+        rate = int(source.samplerate)
+        for profile in profiles:
+            runner.check_cancel()
+            candidates = []
+            for index, seg in enumerate(segments):
+                if seg.speaker_id != profile.id or seg.style not in {"normal", ""}:
+                    continue
+                start, end = float(seg.start), float(seg.end)
+                duration = end - start
+                if duration < 1.2 or duration > 12.0 or start < 0 or end > len(source) / rate + .02:
+                    continue
+                # Adjacent or overlapping lines can contain a second speaker.
+                if any(other.speaker_id != profile.id and
+                       min(float(other.end), end) - max(float(other.start), start) > .05
+                       for other in segments[max(0, index - 2):index] + segments[index + 1:index + 3]):
+                    continue
+                feat = features[index] if features is not None else _acoustic_features(_load_segment(source, start, min(end, start + 8)))
+                if feat.voiced_ratio < .38 or not (-43 < feat.rms_db < -10):
+                    continue
+                pitch_match = (not profile.f0_median or not feat.f0_median or
+                               .68 <= feat.f0_median / profile.f0_median <= 1.45)
+                if not pitch_match:
+                    continue
+                similarity = (cosine(embeddings[index], profile.embedding)
+                              if embeddings is not None and profile.embedding else 1.0)
+                if embeddings is not None and similarity < (.55 if profile.embedding_backend == "speechbrain-ecapa" else .80):
+                    continue
+                score = (min(duration, 5.0) / 5.0 * .3 + min(feat.voiced_ratio, 1.0) * .4
+                         + min(max((feat.rms_db + 43) / 33, 0), 1) * .1
+                         + min(max(similarity, 0), 1) * .2)
+                candidates.append((score, index, start, end))
+
+            candidates.sort(reverse=True)
+            chosen = []
+            total = 0.0
+            for score, _, start, end in candidates:
+                length = min(end - start, 6.0, 10.0 - total)
+                if length < 1.0:
+                    break
+                chosen.append((score, start, start + length))
+                total += length
+                if total >= 8.0 or len(chosen) >= 4:
+                    break
+
+            profile.suggested_reference_audio = ""
+            profile.reference_quality = 0.0
+            profile.reference_timing = []
+            if total < 2.5 or not chosen:
+                progress(f"No clean source voice reference for {profile.display_name}; using its selected voice")
+                continue
+
+            parts = []
+            for _, start, end in sorted(chosen, key=lambda c: c[1]):
+                runner.check_cancel()
+                signal = _load_segment(source, start, end)[:int((end - start) * rate)]
+                edge = min(len(signal) // 2, int(rate * .012))
+                if edge:
+                    signal[:edge] *= np.linspace(0, 1, edge)
+                    signal[-edge:] *= np.linspace(1, 0, edge)
+                parts.extend([signal, np.zeros(int(rate * .08), dtype=np.float32)])
+            audio = np.concatenate(parts)
+            peak = max(float(np.max(np.abs(audio))), .001)
+            audio = np.clip(audio * min(.85 / peak, 2.0), -.98, .98)
+            path = folder / f"{profile.id}.wav"
+            temp = path.with_name(path.stem + ".partial.wav")
+            try:
+                sf.write(str(temp), audio, rate, subtype="PCM_16")
+                temp.replace(path)
+            finally:
+                temp.unlink(missing_ok=True)
+            profile.suggested_reference_audio = str(path.resolve())
+            profile.reference_quality = round(float(np.mean([item[0] for item in chosen])), 2)
+            profile.reference_timing = [[round(a, 2), round(b, 2)] for _, a, b in chosen]
+            progress(f"Selected {total:.1f}s of source speech for {profile.display_name}; review its reference in Characters")
 
 
 def analyze_characters(
@@ -537,6 +653,7 @@ def analyze_characters(
     available_voices: Sequence[str] = (),
     override_path: Optional[Path] = None,
     speaker_backend: str = "auto",
+    make_voice_references: bool = True,
 ) -> Tuple[List[CharacterProfile], dict]:
     """Assign speaker, acoustic profile, and speaking style to each transcript segment.
 
@@ -562,6 +679,17 @@ def analyze_characters(
                     s.style = lab.get("style", "normal")
                     s.style_confidence = float(lab.get("style_confidence", 0.0))
                 _apply_manual_overrides(profiles, override_path)
+                if make_voice_references and (old.get("reference_version") != 1 or any(
+                    p.suggested_reference_audio and not Path(p.suggested_reference_audio).is_file()
+                    for p in profiles
+                )):
+                    analysis_wav = ensure_analysis_wav(vocals, work_dir, runner, resume=resume, force=force)
+                    _choose_voice_references(analysis_wav, segments, profiles, work_dir, runner, progress)
+                    old["reference_version"] = 1
+                    old["characters"] = [p.to_dict() for p in profiles]
+                    _write_json(cache, old)
+                else:
+                    old["characters"] = [p.to_dict() for p in profiles]
                 return profiles, old
 
     try:
@@ -674,9 +802,9 @@ def analyze_characters(
         })
 
     _apply_manual_overrides(profiles, override_path)
-    save_series_profiles(profiles, db_path)
     payload = {
-        "version": 3,
+        "version": 4,
+        "reference_version": 0,
         "signature": signature,
         "speaker_backend": embedder.backend,
         "speaker_threshold": threshold,
@@ -689,13 +817,21 @@ def analyze_characters(
             "role": "Lead/major/supporting/minor is inferred from speaking share, not plot knowledge.",
         },
     }
-    cache.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Speaker clustering is a durable checkpoint; extracting reference clips
+    # can be repeated later without recomputing embeddings if paused here.
+    _write_json(cache, payload)
+    if make_voice_references:
+        _choose_voice_references(analysis_wav, segments, profiles, work_dir, runner, progress,
+                                 features=feats, embeddings=embeds)
+        payload["reference_version"] = 1
+        payload["characters"] = [p.to_dict() for p in profiles]
+        _write_json(cache, payload)
+    save_series_profiles(profiles, db_path)
     return profiles, payload
 
 
 def write_character_map(payload: dict, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json(path, payload)
 
 
 def load_character_map(path: Path) -> dict:
@@ -711,6 +847,7 @@ EDITABLE_CHARACTER_FIELDS = {
     "macos_voice",
     "kokoro_voice",
     "reference_audio",
+    "auto_reference_enabled",
     "expressiveness",
     "elevenlabs_voice_id",
     "tts_rate",
@@ -777,6 +914,9 @@ def update_character_override(path: Path, character_id: str, updates: dict) -> d
             value = float(value)
         elif key == "expressiveness":
             value = max(0.0, min(1.5, float(value)))
+        elif key == "auto_reference_enabled":
+            if not isinstance(value, bool):
+                raise ValueError("Automatic voice reference must be true or false")
         else:
             value = str(value)
         target[key] = value
@@ -799,6 +939,6 @@ def update_character_override(path: Path, character_id: str, updates: dict) -> d
                 saved[key] = target[key]
         existing["version"] = int(existing.get("version", 1) or 1)
         existing["characters"] = list(by_id.values())
-        db_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json(db_path, existing)
 
     return dict(target)

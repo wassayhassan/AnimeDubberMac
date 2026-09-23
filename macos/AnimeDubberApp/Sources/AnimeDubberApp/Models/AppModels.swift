@@ -324,6 +324,9 @@ struct CharacterItem: Identifiable, Hashable {
     var macosVoice: String
     var kokoroVoice: String
     var referenceAudio: String
+    let suggestedReferenceAudio: String
+    let referenceTiming: [[Double]]
+    var autoReferenceEnabled: Bool
     var expressiveness: Double
     var elevenLabsVoiceID: String
     var ttsRate: Int
@@ -345,6 +348,9 @@ struct CharacterItem: Identifiable, Hashable {
         macosVoice = dictionary["macos_voice"] as? String ?? ""
         kokoroVoice = dictionary["kokoro_voice"] as? String ?? "auto"
         referenceAudio = dictionary["reference_audio"] as? String ?? ""
+        suggestedReferenceAudio = dictionary["suggested_reference_audio"] as? String ?? ""
+        referenceTiming = dictionary["reference_timing"] as? [[Double]] ?? []
+        autoReferenceEnabled = dictionary["auto_reference_enabled"] as? Bool ?? true
         expressiveness = (dictionary["expressiveness"] as? NSNumber)?.doubleValue ?? 0.5
         elevenLabsVoiceID = dictionary["elevenlabs_voice_id"] as? String ?? ""
         ttsRate = (dictionary["tts_rate"] as? NSNumber)?.intValue ?? 205
@@ -364,6 +370,8 @@ struct CharacterDraft: Equatable {
     var macosVoice = ""
     var kokoroVoice = "auto"
     var referenceAudio = ""
+    var suggestedReferenceAudio = ""
+    var autoReferenceEnabled = true
     var expressiveness = 0.5
     var elevenLabsVoiceID = ""
     var ttsRate = 205
@@ -382,6 +390,8 @@ struct CharacterDraft: Equatable {
         macosVoice = character.macosVoice
         kokoroVoice = character.kokoroVoice
         referenceAudio = character.referenceAudio
+        suggestedReferenceAudio = character.suggestedReferenceAudio
+        autoReferenceEnabled = character.autoReferenceEnabled
         expressiveness = character.expressiveness
         elevenLabsVoiceID = character.elevenLabsVoiceID
         ttsRate = character.ttsRate
@@ -400,6 +410,7 @@ struct CharacterDraft: Equatable {
             "macos_voice": macosVoice,
             "kokoro_voice": kokoroVoice,
             "reference_audio": referenceAudio,
+            "auto_reference_enabled": autoReferenceEnabled,
             "expressiveness": expressiveness,
             "elevenlabs_voice_id": elevenLabsVoiceID,
             "tts_rate": ttsRate,

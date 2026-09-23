@@ -122,6 +122,7 @@ class Config:
     tts_engine: str = "auto"  # auto|chatterbox|kokoro|macos|piper|elevenlabs
     voice: str = ""
     chatterbox_reference_audio: str = ""
+    auto_voice_references: bool = True
     chatterbox_expressiveness: float = 0.5
     chatterbox_device: str = "auto"  # auto|mps|cuda|cpu
     chatterbox_turbo: bool = True
@@ -1226,6 +1227,14 @@ def _pitch_filters(semitones: float) -> List[str]:
     return [f"asetrate={SAMPLE_RATE * factor:.4f}", f"aresample={SAMPLE_RATE}", atempo_chain(1.0 / factor)]
 
 
+def _chatterbox_reference(profile: dict, config: Config) -> str:
+    return str(
+        profile.get("reference_audio", "") or config.chatterbox_reference_audio or
+        (profile.get("suggested_reference_audio", "") if config.auto_voice_references
+         and profile.get("auto_reference_enabled", True) else "")
+    ).strip()
+
+
 def prepare_tts_clip(
     seg: Segment,
     index: int,
@@ -1254,9 +1263,7 @@ def prepare_tts_clip(
         gain *= 0.64
 
     eleven_voice = str(profile.get("elevenlabs_voice_id", "") or config.elevenlabs_voice_id)
-    chatterbox_reference = str(
-        profile.get("reference_audio", "") or config.chatterbox_reference_audio
-    ).strip()
+    chatterbox_reference = _chatterbox_reference(profile, config)
     chatterbox_expressiveness = float(
         profile.get("expressiveness", config.chatterbox_expressiveness)
     )
@@ -1316,6 +1323,10 @@ def prepare_tts_clip(
         signature_data["piper_speaker"] = config.piper_speaker
     elif resolved_tts == "chatterbox":
         signature_data["reference_audio"] = chatterbox_reference
+        if chatterbox_reference:
+            ref_path = Path(chatterbox_reference).expanduser()
+            if ref_path.is_file():
+                signature_data["reference_fingerprint"] = [ref_path.stat().st_size, ref_path.stat().st_mtime_ns]
         signature_data["expressiveness"] = round(chatterbox_expressiveness, 3)
         signature_data["device"] = config.chatterbox_device
         signature_data["turbo"] = bool(config.chatterbox_turbo)
@@ -1942,6 +1953,8 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             speaker_threshold=config.speaker_threshold, series_id=config.series_id or key,
             available_voices=list_macos_voices(), override_path=char_path,
             speaker_backend=config.speaker_backend,
+            make_voice_references=config.auto_voice_references and config.target_language == "en"
+                                  and config.tts_engine in {"auto", "chatterbox"},
         )
         if segments is not zh_segments:
             for seg in segments:
@@ -2018,6 +2031,8 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         "translation": config.translation,
         "ollama_model": config.ollama_model if config.translation == "ollama" else None,
         "tts_engine": config.tts_engine,
+        "auto_voice_references": config.auto_voice_references,
+        "chatterbox_reference_audio": config.chatterbox_reference_audio,
         "piper_model": config.piper_model if config.tts_engine in {"piper", "auto"} else None,
         "multi_character": config.multi_character,
         "series_id": config.series_id or key,

@@ -14,11 +14,29 @@ from anime_dubber.characters import (
     _style_for_segment,
     cosine,
     analyze_characters,
+    write_character_map,
+    update_character_override,
 )
-from anime_dubber.core import CommandRunner, Segment
+from anime_dubber.core import CommandRunner, Segment, Config, _chatterbox_reference
 
 
 class CharacterLogicTests(unittest.TestCase):
+    def test_reference_priority_and_opt_out(self):
+        config = Config(source="video", output_dir=Path("."), chatterbox_reference_audio="")
+        profile = {"suggested_reference_audio": "/auto/character.wav", "auto_reference_enabled": True}
+        self.assertEqual(_chatterbox_reference(profile, config), "/auto/character.wav")
+        profile["reference_audio"] = "/chosen.wav"
+        self.assertEqual(_chatterbox_reference(profile, config), "/chosen.wav")
+        profile["reference_audio"] = ""
+        config.chatterbox_reference_audio = "/global.wav"
+        self.assertEqual(_chatterbox_reference(profile, config), "/global.wav")
+        config.chatterbox_reference_audio = ""
+        profile["auto_reference_enabled"] = False
+        self.assertEqual(_chatterbox_reference(profile, config), "")
+        config.auto_voice_references = False
+        profile["auto_reference_enabled"] = True
+        self.assertEqual(_chatterbox_reference(profile, config), "")
+
     def tone(self, freq, amp=0.2, seconds=1.0, sr=16000):
         t = np.arange(int(sr * seconds), dtype=np.float32) / sr
         return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
@@ -51,6 +69,76 @@ class CharacterLogicTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg required")
 class CharacterIntegrationTests(unittest.TestCase):
+    def test_auto_voice_clips_are_distinct_and_manual_choice_survives_cached_analysis(self):
+        import soundfile as sf
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rate = 16000
+            def speech(freq):
+                t = np.arange(rate * 3, dtype=np.float32) / rate
+                return (.2 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+            vocals = root / "vocals.wav"
+            sf.write(vocals, np.concatenate([speech(f) for f in (120, 280, 125, 275)]), rate)
+            segments = [Segment(0, 3, "甲"), Segment(3, 6, "乙"),
+                        Segment(6, 9, "甲"), Segment(9, 12, "乙")]
+            work = root / "work"
+            map_path = root / "characters.json"
+            options = dict(resume=True, max_speakers=6, speaker_threshold=.91,
+                           speaker_backend="acoustic", override_path=map_path)
+            profiles, payload = analyze_characters(vocals, segments, work, root,
+                                                    CommandRunner(), lambda _: None, **options)
+            self.assertEqual(len(profiles), 2)
+            paths = [Path(p.suggested_reference_audio) for p in profiles]
+            self.assertEqual(len(set(paths)), 2)
+            self.assertTrue(all(p.exists() for p in paths))
+            self.assertTrue(all(p.reference_timing for p in profiles))
+            write_character_map(payload, map_path)
+            update_character_override(map_path, profiles[0].id,
+                                      {"reference_audio": "/my/manual.wav", "auto_reference_enabled": False})
+            recovered, _ = analyze_characters(vocals, segments, work, root,
+                                              CommandRunner(), lambda _: None, **options)
+            chosen = next(p for p in recovered if p.id == profiles[0].id)
+            self.assertEqual(chosen.reference_audio, "/my/manual.wav")
+            self.assertFalse(chosen.auto_reference_enabled)
+            self.assertEqual(chosen.suggested_reference_audio, profiles[0].suggested_reference_audio)
+
+    def test_overlapping_and_short_speech_does_not_create_a_voice_clone(self):
+        import soundfile as sf
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rate = 16000
+            t = np.arange(rate * 4, dtype=np.float32) / rate
+            audio = .2 * np.sin(2 * np.pi * 130 * t)
+            vocals = root / "vocals.wav"
+            sf.write(vocals, audio, rate)
+            from anime_dubber.characters import CharacterProfile, _choose_voice_references
+            profiles = [CharacterProfile(id="a", display_name="A", f0_median=130),
+                        CharacterProfile(id="b", display_name="B", f0_median=130)]
+            segments = [Segment(0, 3, "A", speaker_id="a"),
+                        Segment(1, 3, "B", speaker_id="b"),
+                        Segment(3, 3.5, "A", speaker_id="a")]
+            _choose_voice_references(vocals, segments, profiles, root, CommandRunner(), lambda _: None)
+            self.assertTrue(all(not p.suggested_reference_audio for p in profiles))
+
+    def test_cached_speaker_analysis_can_add_references_later(self):
+        import soundfile as sf
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rate = 16000
+            t = np.arange(rate * 3, dtype=np.float32) / rate
+            vocals = root / "vocals.wav"
+            sf.write(vocals, (.2 * np.sin(2 * np.pi * 130 * t)).astype(np.float32), rate)
+            segments = [Segment(0, 3, "甲")]
+            options = dict(resume=True, speaker_backend="acoustic")
+            first, _ = analyze_characters(vocals, segments, root / "work", root,
+                                          CommandRunner(), lambda _: None,
+                                          make_voice_references=False, **options)
+            self.assertFalse(first[0].suggested_reference_audio)
+            second, _ = analyze_characters(vocals, segments, root / "work", root,
+                                           CommandRunner(), lambda _: None,
+                                           make_voice_references=True, **options)
+            self.assertTrue(Path(second[0].suggested_reference_audio).exists())
+
     def test_full_character_analysis_on_synthetic_audio(self):
         try:
             import soundfile as sf

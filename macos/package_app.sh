@@ -94,7 +94,7 @@ if [[ "$EMBED_VENV" -eq 1 && ! -x "$ROOT/.venv/bin/python" ]]; then
   exit 1
 fi
 
-VERSION="$("$ROOT/.venv/bin/python" -c 'import anime_dubber; print(anime_dubber.__version__)' 2>/dev/null || echo "4.0.0a6")"
+VERSION="$("$ROOT/.venv/bin/python" -c 'import anime_dubber; print(anime_dubber.__version__)' 2>/dev/null || echo "4.0.0a7")"
 SHORT_VERSION="${VERSION%%a*}"
 
 echo "Building SwiftUI app (release)…"

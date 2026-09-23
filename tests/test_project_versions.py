@@ -26,8 +26,17 @@ class ProjectVersionsTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "TTS line 50 failed"):
                     first_service.run_sync({"source": "video.mp4", "output_dir": temp})
             dub = first_service.get_project(temp, project["project_id"])["dubs"][0]
+            # Simulate a version made before source voice selection existed.
+            manifest = Path(first_service.get_project(temp, project["project_id"])["manifest_path"])
+            old_manifest = json.loads(manifest.read_text())
+            old_manifest["dubs"][0]["config"].pop("auto_voice_references", None)
+            manifest.write_text(json.dumps(old_manifest))
             resumed = ApplicationService()
-            with patch("anime_dubber.application.service.run_pipeline", side_effect=lambda cfg, p, r: calls.append(cfg.version_id) or {}):
+            def resume_pipeline(cfg, progress, runner):
+                self.assertFalse(cfg.auto_voice_references)
+                calls.append(cfg.version_id)
+                return {}
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=resume_pipeline):
                 job_id = resumed.resume_dub(temp, project["project_id"], dub["id"])
                 for _ in range(100):
                     if resumed.get_job(job_id)["status"] not in {"queued", "running"}:

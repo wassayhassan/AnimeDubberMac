@@ -162,7 +162,12 @@ struct DubDetailsView: View {
             let name = item["display_name"] as? String ?? item["id"] as? String ?? "Character"
             let provider = item["tts_provider"] as? String ?? "inherit"
             let voice = item["elevenlabs_voice_id"] as? String ?? item["kokoro_voice"] as? String ?? item["macos_voice"] as? String ?? ""
-            return "\(name) · \(provider)\(voice.isEmpty ? "" : " · \(voice)")"
+            let manual = item["reference_audio"] as? String ?? ""
+            let suggested = item["suggested_reference_audio"] as? String ?? ""
+            let automatic = item["auto_reference_enabled"] as? Bool ?? true
+            let reference = manual.isEmpty && automatic ? suggested : manual
+            let source = reference.isEmpty ? "" : " · \(URL(fileURLWithPath: reference).lastPathComponent)"
+            return "\(name) · \(provider)\(voice.isEmpty ? "" : " · \(voice)")\(source)"
         }
     }
 

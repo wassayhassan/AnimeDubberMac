@@ -133,7 +133,7 @@ Kokoro
 macOS / Piper / ElevenLabs fallback
 ```
 
-Each analyzed character can override the app default in **Characters → English Voice**. Chatterbox reference audio is never extracted or assigned automatically: only a clip explicitly selected by the user is used as a cloning reference. Use reference voices you have permission to use.
+When English dubbing uses Chatterbox and speaker detection is enabled, **Choose character voice clips automatically** extracts short, isolated source dialogue for each character. Run **Analyze Characters** first to listen to each chosen clip in **Characters → English Voice** and replace or disable a bad match before generating the dub. A character without enough clean speech uses the configured default voice. A manually chosen character reference takes priority, followed by the global Chatterbox reference, then the automatic clip. The selected clips and timestamps remain in the project work folder and character map for later review and resume. Use `--no-auto-source-voices` to disable this from the CLI.
 
 ## CLI
 
