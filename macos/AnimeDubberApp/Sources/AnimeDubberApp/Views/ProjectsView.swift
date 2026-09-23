@@ -9,9 +9,9 @@ struct ProjectsView: View {
                 ContentUnavailableView {
                     Label("No Projects Yet", systemImage: "square.stack.3d.up")
                 } description: {
-                    Text("Start a project with a video or open one created by the CLI.")
+                    Text("Add a video and choose a language to make your first dub.")
                 } actions: {
-                    Button("New Project") { state.newProject() }
+                    Button("Dub a Video") { state.newProject() }
                         .buttonStyle(.borderedProminent)
                 }
             } else {
@@ -34,7 +34,7 @@ struct ProjectsView: View {
                         }.width(110)
                     }
                     HStack {
-                        Text("Select a project to open its workspace.")
+                        Text("Select a video to see its dubbed versions.")
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Button("Open Project") {
@@ -49,7 +49,7 @@ struct ProjectsView: View {
         .navigationTitle("Projects")
         .toolbar {
             Button { state.newProject() } label: {
-                Label("New Project", systemImage: "folder.badge.plus")
+                Label("Dub a Video", systemImage: "waveform.badge.plus")
             }
             Button { state.refreshProjects() } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")

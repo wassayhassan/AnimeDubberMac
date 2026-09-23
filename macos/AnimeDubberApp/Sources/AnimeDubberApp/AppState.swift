@@ -12,7 +12,7 @@ final class AppState: ObservableObject {
     @Published var dubName = ""
     @Published var targetLanguage = "en"
     @Published var outputFolder = "~/Movies/AnimeDubber"
-    @Published var seriesID = "10000-years-cultivation"
+    @Published var seriesID = ""
     @Published var outputMode: OutputMode = .dub
 
     @Published var asrProvider: ASRProvider = .auto
@@ -48,7 +48,7 @@ final class AppState: ObservableObject {
     @Published var speakerBackend = "auto"
     @Published var maxSpeakers = 12
     @Published var speakerThreshold = 0.0
-    @Published var seriesContext = "Chinese xianxia/xuanhuan cultivation animation. Keep names, sects, realms, system terms, and cultivation terminology consistent."
+    @Published var seriesContext = ""
     @Published var backgroundVolume = 1.0
     @Published var dubVolume = 1.15
     @Published var backgroundDucking = false
@@ -59,11 +59,23 @@ final class AppState: ObservableObject {
     @Published var activityExpanded = false
     @Published var statusText = "Connecting to backend…"
     @Published var progressFraction: Double?
+    @Published var currentStage = "preparing"
+    @Published var stageDetail = ""
+    @Published var downloadDetail = ""
+    @Published var jobIssue = ""
+    @Published var jobIssueDetail = ""
+    @Published var startPending = false
     @Published var activeJobID: String?
+    private var pendingQuickStart = false
+    private var pendingQuickProjectID: String?
+    private var openResultForJobID: String?
+    private var openSubtitlesOnFinish = false
+    private var subtitlesJobFinished = false
     private var analyzingCurrentJob = false
     private var openPendingReview = false
     @Published var systemCheckItems: [SystemCheckItem] = []
     @Published var showingSystemCheck = false
+    @Published var settingsShowProviders = false
 
     @Published var projects: [ProjectSummary] = []
     @Published var selectedProjectID: String?
@@ -227,7 +239,8 @@ final class AppState: ObservableObject {
         speakerBackend = preferences.speakerBackend
         maxSpeakers = preferences.maxSpeakers
         speakerThreshold = preferences.speakerThreshold
-        seriesContext = preferences.seriesContext
+        let oldExample = "Chinese xianxia/xuanhuan cultivation animation. Keep names, sects, realms, system terms, and cultivation terminology consistent."
+        seriesContext = preferences.seriesContext == oldExample ? "" : preferences.seriesContext
         backgroundVolume = preferences.backgroundVolume
         dubVolume = preferences.dubVolume
         backgroundDucking = preferences.backgroundDucking
@@ -278,6 +291,78 @@ final class AppState: ObservableObject {
             systemCheckItems = [SystemCheckItem(name: "Backend", ok: false, detail: error.localizedDescription)]
             showingSystemCheck = true
         }
+    }
+
+    var canQuickStart: Bool {
+        if case .ready = backendState {
+            return activeJobID == nil && !startPending
+        }
+        return false
+    }
+
+    var quickStartProblem: String? {
+        let input = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if input.isEmpty { return "Choose a video file or paste a video page link." }
+        if let url = URL(string: input), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            if url.host?.contains("googlevideo.com") == true || url.path.contains("/videoplayback") {
+                return "This temporary playback link expires. Paste the video's normal page link instead."
+            }
+        } else {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: (input as NSString).expandingTildeInPath, isDirectory: &isDirectory),
+                  !isDirectory.boolValue else {
+                return "The video file could not be found. Choose it again or paste a video page link."
+            }
+        }
+        if voiceProvider == .elevenlabs && elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "The selected ElevenLabs voice needs an API key. Add one in Settings before dubbing."
+        }
+        if voiceProvider == .piper && piperModel.isEmpty {
+            return "The selected Piper voice needs a model file. Choose one in Advanced settings."
+        }
+        if reviewBeforeDub && translationProvider == .whisper {
+            return "Automatic subtitle correction needs a local translation model. Change the translation provider in Advanced settings."
+        }
+        if targetLanguage != "en" {
+            if voiceProvider != .elevenlabs || elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Dubbing this language needs an ElevenLabs voice and API key. Set it up in Settings, or choose English."
+            }
+            if translationProvider == .whisper {
+                return "Choose a local translation model in Advanced settings for this language."
+            }
+        }
+        if outputFolder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Choose an output folder in Settings." }
+        return nil
+    }
+
+    func quickStart() {
+        guard canQuickStart else { return }
+        if let problem = quickStartProblem {
+            jobIssue = problem
+            selection = .newProject
+            return
+        }
+        jobIssue = ""
+        jobIssueDetail = ""
+        startPending = true
+        pendingQuickStart = true
+        selection = .processing
+        statusText = "Checking your setup…"
+        do {
+            _ = try backend.send(method: "system_check", id: "quick-system-check-\(UUID().uuidString)")
+        } catch {
+            failQuickStart(error.localizedDescription)
+        }
+    }
+
+    private func failQuickStart(_ message: String) {
+        pendingQuickStart = false
+        pendingQuickProjectID = nil
+        startPending = false
+        jobIssue = message
+        jobIssueDetail = message
+        statusText = "Could not start"
+        selection = .processing
     }
 
     func startJob(analysis: Bool) {
@@ -341,16 +426,24 @@ final class AppState: ObservableObject {
         do {
             statusText = analysis ? "Starting character analysis…" : "Starting dub…"
             progressFraction = nil
-            activityExpanded = true
+            currentStage = "preparing"
+            stageDetail = "Preparing video"
+            downloadDetail = ""
+            jobIssue = ""
+            if analysis { activityExpanded = true }
             let id = analysis ? "analyze-\(UUID().uuidString)" : "run-\(UUID().uuidString)"
             _ = try backend.send(
                 method: analysis ? "analyze_characters" : "run_job",
                 params: params,
                 id: id
             )
+            if !analysis { selection = .processing }
+            openSubtitlesOnFinish = !analysis && outputMode == .subtitles
+            subtitlesJobFinished = false
         } catch {
             activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
             statusText = "Could not start"
+            jobIssue = error.localizedDescription
         }
     }
 
@@ -450,6 +543,10 @@ final class AppState: ObservableObject {
         selectedProjectID = nil
         source = ""
         projectName = ""
+        seriesID = ""
+        seriesContext = ""
+        jobIssue = ""
+        outputMode = .dub
         selection = .newProject
     }
 
@@ -697,6 +794,12 @@ final class AppState: ObservableObject {
             let message = error?["message"] as? String ?? "Backend request failed."
             activity.append(ActivityEntry(kind: .error, message: message))
             statusText = message
+            if id.hasPrefix("quick-") || (pendingQuickStart && id.hasPrefix("create-project-")) {
+                failQuickStart(message)
+            } else if (id.hasPrefix("run-") || id.hasPrefix("resume-")) && selection == .processing {
+                jobIssue = message
+                jobIssueDetail = message
+            }
             if id.hasPrefix("save-character-") {
                 characterSaveMessage = message
             }
@@ -724,15 +827,53 @@ final class AppState: ObservableObject {
                 SystemCheckItem(
                     name: $0["name"] as? String ?? "Unknown",
                     ok: $0["ok"] as? Bool ?? false,
-                    detail: $0["detail"] as? String ?? ""
+                    detail: $0["detail"] as? String ?? "",
+                    optional: $0["optional"] as? Bool ?? false
                 )
             }
             showingSystemCheck = true
+
+        case let id where id.hasPrefix("quick-system-check-"):
+            let checks = result["checks"] as? [[String: Any]] ?? []
+            let required = ["ffmpeg", "ffprobe", "demucs"] + (source.hasPrefix("http") ? ["yt-dlp"] : [])
+            var missing = required.filter { name in
+                !checks.contains { ($0["name"] as? String) == name && ($0["ok"] as? Bool) == true }
+            }
+            let capabilities = result["capabilities"] as? [String: Any] ?? [:]
+            let providers = capabilities["providers"] as? [String: Any] ?? [:]
+            let speech = providers["asr"] as? [String: Bool] ?? [:]
+            let translations = providers["translation"] as? [String: Bool] ?? [:]
+            let voices = providers["tts"] as? [String: Bool] ?? [:]
+            if (asrProvider == .auto && !(speech["mlx_whisper"] == true || speech["faster_whisper"] == true)) ||
+                (asrProvider == .mlxWhisper && speech["mlx_whisper"] != true) ||
+                (asrProvider == .fasterWhisper && speech["faster_whisper"] != true) { missing.append("speech recognition") }
+            if (translationProvider == .llm && translations["mlx_llm"] != true) ||
+                (translationProvider == .ollama && translations["ollama"] != true) ||
+                (translationProvider == .auto && !(translations["mlx_llm"] == true || translations["ollama"] == true)) {
+                missing.append("translation model runtime")
+            }
+            if targetLanguage == "en" && voiceProvider != .auto && voiceProvider != .elevenlabs && voices[voiceProvider.rawValue] != true {
+                missing.append("selected voice engine")
+            }
+            if !missing.isEmpty {
+                failQuickStart("Setup needed: \(missing.joined(separator: ", ")). Open System Check for details, then retry.")
+            } else {
+                do {
+                    statusText = "Creating project…"
+                    _ = try backend.send(method: "create_project", params: [
+                        "source": source.trimmingCharacters(in: .whitespacesAndNewlines),
+                        "output_dir": outputFolder,
+                        "name": projectName,
+                        "series_id": seriesID,
+                    ], id: "create-project-quick-\(UUID().uuidString)")
+                } catch { failQuickStart(error.localizedDescription) }
+            }
 
         default:
             if id.hasPrefix("run-") || id.hasPrefix("analyze-") || id.hasPrefix("resume-") {
                 if let jobID = result["job_id"] as? String {
                     activeJobID = jobID
+                    if id.hasPrefix("run-") && outputMode == .dub { openResultForJobID = jobID }
                     statusText = "Queued"
                     activity.append(ActivityEntry(kind: .info, message: "Started \(jobID)."))
                     refreshProjects()
@@ -740,6 +881,29 @@ final class AppState: ObservableObject {
             } else if id.hasPrefix("projects-") {
                 let rows = resultAny as? [[String: Any]] ?? []
                 projects = rows.compactMap(ProjectSummary.init(dictionary:))
+                if let pendingQuickProjectID,
+                   projects.contains(where: { $0.id == pendingQuickProjectID }) {
+                    self.pendingQuickProjectID = nil
+                    pendingQuickStart = false
+                    startPending = false
+                    outputMode = .dub
+                    startJob(analysis: false)
+                    selection = .processing
+                }
+                if let openResultForJobID,
+                   let project = projects.first(where: { $0.dubs.contains(where: { $0.jobID == openResultForJobID && $0.status != "running" }) }),
+                   let dub = project.dubs.first(where: { $0.jobID == openResultForJobID }) {
+                    self.openResultForJobID = nil
+                    if selection == .processing {
+                        selectedProjectID = project.id
+                        selection = .dub(dub.id)
+                    }
+                }
+                if openSubtitlesOnFinish && subtitlesJobFinished {
+                    openSubtitlesOnFinish = false
+                    subtitlesJobFinished = false
+                    if selection == .processing { selection = .subtitles }
+                }
                 if openPendingReview {
                     if let waiting = currentProject?.dubs.first(where: { $0.status == "paused" && $0.error == "Subtitle review required before voice generation" }) {
                         selection = .dub(waiting.id)
@@ -758,7 +922,12 @@ final class AppState: ObservableObject {
                 }
             } else if id.hasPrefix("create-project-") {
                 selectedProjectID = result["project_id"] as? String
-                selection = .overview
+                if id.hasPrefix("create-project-quick-") {
+                    pendingQuickProjectID = selectedProjectID
+                    statusText = "Preparing dub…"
+                } else {
+                    selection = .overview
+                }
                 refreshProjects()
             } else if id.hasPrefix("update-project-") {
                 statusText = "Project saved"
@@ -807,15 +976,25 @@ final class AppState: ObservableObject {
         switch event {
         case "job_started":
             analyzingCurrentJob = data["kind"] as? String == "analyze"
+            if let jobID = payload["job_id"] as? String, !analyzingCurrentJob,
+               outputMode == .dub { openResultForJobID = jobID }
 
         case "stage":
             let title = data["title"] as? String ?? "Working"
-            statusText = title
-            progressFraction = data["fraction"] as? Double
+            let stage = data["stage"] as? String ?? "preparing"
+            if stage != "preparing" || currentStage == "preparing" {
+                currentStage = stage
+                statusText = stage.replacingOccurrences(of: "_", with: " ").capitalized
+                progressFraction = data["fraction"] as? Double
+                if !title.lowercased().hasPrefix("warning") { stageDetail = title }
+            }
 
         case "progress":
-            statusText = data["title"] as? String ?? "Working"
+            statusText = "Downloading video"
             progressFraction = data["fraction"] as? Double
+            currentStage = data["stage"] as? String ?? "preparing"
+            stageDetail = data["title"] as? String ?? "Downloading video"
+            downloadDetail = [data["total"] as? String, data["speed"] as? String, data["eta"] as? String].compactMap { $0 }.joined(separator: " · ")
 
         case "log":
             if let message = data["message"] as? String, !message.isEmpty {
@@ -832,11 +1011,16 @@ final class AppState: ObservableObject {
             refreshProjects()
 
         case "error":
-            activity.append(ActivityEntry(kind: .error, message: data["message"] as? String ?? "Backend error"))
+            let raw = data["message"] as? String ?? "Backend error"
+            jobIssueDetail = raw
+            jobIssue = raw.contains("403") ? "The video site refused the download. Try the normal video page link, or choose a local file." : raw.contains("ffprobe") || raw.contains("ffmpeg") ? "Video tools are missing. Open System Check for setup details." : raw
+            activity.append(ActivityEntry(kind: .error, message: raw))
             statusText = "Failed"
 
         case "finished":
             let status = data["status"] as? String ?? "completed"
+            if status != "completed" { openSubtitlesOnFinish = false }
+            subtitlesJobFinished = openSubtitlesOnFinish && status == "completed"
             openPendingReview = status == "paused"
             let showVoices = analyzingCurrentJob && status == "completed"
             analyzingCurrentJob = false

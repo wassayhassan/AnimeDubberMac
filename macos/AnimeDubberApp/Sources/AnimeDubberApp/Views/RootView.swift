@@ -9,23 +9,15 @@ struct RootView: View {
                 Section("Library") {
                     sidebarRow(.projects)
                     sidebarRow(.newProject)
+                    if state.activeJobID != nil || state.startPending { sidebarRow(.processing) }
                 }
 
                 if let project = state.currentProject {
                     Section(project.displayName) {
                         sidebarRow(.overview)
-                        sidebarRow(.media)
                         sidebarRow(.subtitles)
                         sidebarRow(.dubs)
-                        ForEach(project.dubs) { dub in
-                            Label(dub.title, systemImage: dub.status == "completed" ? "waveform.circle.fill" : "clock.arrow.circlepath")
-                                .lineLimit(1)
-                                .padding(.leading, 12)
-                                .tag(SidebarDestination.dub(dub.id))
-                        }
                         sidebarRow(.newDub)
-                        sidebarRow(.characters)
-                        sidebarRow(.projectSettings)
                     }
                 }
 
@@ -53,6 +45,10 @@ struct RootView: View {
             SystemCheckSheet().environmentObject(state)
         }
         .onChange(of: state.settingsSnapshot) { _, _ in state.savePreferences() }
+        .onChange(of: state.selection) { _, destination in
+            if destination == .newDub { state.outputMode = .dub }
+            if destination == .newSubtitles { state.outputMode = .subtitles }
+        }
     }
 
     private func sidebarRow(_ destination: SidebarDestination) -> some View {
@@ -66,9 +62,10 @@ struct RootView: View {
         switch state.selection ?? .projects {
         case .projects: ProjectsView()
         case .newProject: NewProjectView()
+        case .processing: ProcessingView()
         case .overview, .media, .subtitles, .dubs: ProjectWorkspaceView()
         case .dub(let id): DubDetailsView(dubID: id)
-        case .newDub: NewDubView()
+        case .newDub, .newSubtitles: NewDubView()
         case .characters: CharactersView()
         case .projectSettings: ProjectSettingsView()
         case .activity: ActivityView()
@@ -100,13 +97,18 @@ private struct SystemCheckSheet: View {
             List(state.systemCheckItems) { item in
                 Label {
                     VStack(alignment: .leading) {
-                        Text(item.name).fontWeight(.medium)
+                        Text(item.name + (item.optional && !item.ok ? " (optional)" : ""))
+                            .fontWeight(.medium)
                         Text(item.detail).font(.caption).foregroundStyle(.secondary)
                     }
                 } icon: {
-                    Image(systemName: item.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(item.ok ? .green : .red)
+                    Image(systemName: item.ok ? "checkmark.circle.fill" : item.optional ? "minus.circle" : "xmark.circle.fill")
+                        .foregroundStyle(item.ok ? .green : item.optional ? .secondary : .red)
                 }
+            }
+            if state.systemCheckItems.contains(where: { !$0.ok && !$0.optional }) {
+                Text("Setup is incomplete. Run the project's setup.sh from Terminal, then reopen AnimeDubber and run System Check again. This installs video tools and Python dependencies.")
+                    .font(.callout)
             }
         }
         .padding(22).frame(width: 560, height: 430)

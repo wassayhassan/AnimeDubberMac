@@ -30,6 +30,10 @@ struct SettingsView: View {
         .onDisappear {
             state.savePreferences()
         }
+        .onAppear {
+            if state.targetLanguage != "en" || state.settingsShowProviders { selectedTab = "providers" }
+            state.settingsShowProviders = false
+        }
     }
 
     private var general: some View {
