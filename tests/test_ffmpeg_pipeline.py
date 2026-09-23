@@ -236,6 +236,21 @@ class FfmpegPipelineTests(unittest.TestCase):
                     prepare_tts_clip(seg, 1, d / "tts", cfg, CommandRunner(), messages.append,
                                      next_start=5.8)
 
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say), \
+                 patch.object(runner, "run", wraps=runner.run) as sped_commands:
+                sped_clip = prepare_tts_clip(seg, 2, d / "tts", cfg, runner, messages.append,
+                                             next_start=6.4, max_tempo=1.5)
+            self.assertLessEqual(ffprobe_duration(sped_clip, runner), 1.43)
+            speed_filters = [call.args[0][call.args[0].index("-af") + 1]
+                             for call in sped_commands.call_args_list if "-af" in call.args[0]]
+            self.assertTrue(any("atempo=" in item for item in speed_filters))
+            self.assertFalse(any("atempo=1.5" in item for item in speed_filters))
+
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say):
+                with self.assertRaises(TimingOverlapError):
+                    prepare_tts_clip(seg, 3, d / "tts", cfg, CommandRunner(), messages.append,
+                                     next_start=6.0, max_tempo=1.5)
+
     def test_trailing_tts_silence_does_not_force_fast_speech(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
