@@ -28,9 +28,9 @@ class ProjectVersionsTests(unittest.TestCase):
             dub = first_service.get_project(temp, project["project_id"])["dubs"][0]
             # Simulate a version made before source voice selection existed.
             manifest = Path(first_service.get_project(temp, project["project_id"])["manifest_path"])
-            old_manifest = json.loads(manifest.read_text())
+            old_manifest = json.loads(manifest.read_text(encoding="utf-8"))
             old_manifest["dubs"][0]["config"].pop("auto_voice_references", None)
-            manifest.write_text(json.dumps(old_manifest))
+            manifest.write_text(json.dumps(old_manifest), encoding="utf-8")
             resumed = ApplicationService()
             def resume_pipeline(cfg, progress, runner):
                 self.assertFalse(cfg.auto_voice_references)

@@ -1,13 +1,71 @@
 import tempfile
 import unittest
+import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
+
+import numpy as np
 
 from anime_dubber.characters import CharacterProfile
 from anime_dubber.core import CommandRunner, Config, Segment, run_pipeline
 
 
 class PipelineOrchestrationTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
+    def test_auto_character_references_reach_chatterbox_in_full_dub(self):
+        try:
+            import soundfile as sf
+        except ImportError:
+            self.skipTest("soundfile required")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            video = root / "source.mp4"
+            video.write_bytes(b"video")
+            vocals = root / "vocals.wav"
+            rate = 16000
+            def speech(freq):
+                t = np.arange(rate * 3, dtype=np.float32) / rate
+                return (.2 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+            sf.write(vocals, np.concatenate([speech(f) for f in (120, 280, 125, 275)]), rate)
+
+            def transcribe(*_args, **_kwargs):
+                return [Segment(i * 3, (i + 1) * 3, "甲" if i % 2 == 0 else "乙") for i in range(4)]
+
+            def translate(items, *_args, **_kwargs):
+                for item in items:
+                    item.translated = "Hello"
+                return items
+
+            references = []
+            def synthesize(_text, output, **kwargs):
+                reference = Path(kwargs["reference_audio"])
+                self.assertTrue(reference.is_file())
+                references.append(reference)
+                sf.write(output, speech(400), rate)
+
+            cfg = Config(source=str(video), output_dir=root / "project", version_id="first_dub",
+                         tts_engine="chatterbox", translation="llm", speaker_backend="acoustic",
+                         speaker_threshold=.91, multi_character=True)
+            with patch("anime_dubber.core.extract_audio", return_value=vocals), \
+                 patch("anime_dubber.core.separate_dialogue", return_value=(vocals, vocals)), \
+                 patch("anime_dubber.core.transcribe_audio", side_effect=transcribe), \
+                 patch("anime_dubber.core.translate_with_llm", side_effect=translate), \
+                 patch("anime_dubber.core.list_macos_voices", return_value=[]), \
+                 patch("anime_dubber.providers.tts.synthesize_chatterbox", side_effect=synthesize), \
+                 patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dst, _r, _p: dst.write_bytes(b"final")):
+                results = run_pipeline(cfg, lambda _m: None, CommandRunner())
+
+            self.assertEqual(len(references), 4)
+            self.assertEqual(references[0], references[2])
+            self.assertEqual(references[1], references[3])
+            self.assertNotEqual(references[0], references[1])
+            self.assertTrue(results["dub_audio"].is_file())
+            self.assertTrue(results["translated_srt"].is_file())
+            self.assertTrue(results["dubbed_video"].is_file())
+            character_map = json.loads(results["character_map"].read_text(encoding="utf-8"))
+            self.assertEqual({Path(p["suggested_reference_audio"]) for p in character_map["characters"]}, set(references))
+
     def test_multi_character_profiles_reach_tts(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
