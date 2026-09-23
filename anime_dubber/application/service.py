@@ -108,6 +108,7 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         chatterbox_reference_audio=str(
             tts.get("chatterbox_reference_audio", data.get("chatterbox_reference_audio", "")) or ""
         ),
+        auto_voice_references=bool(tts.get("auto_voice_references", data.get("auto_voice_references", True))),
         chatterbox_expressiveness=float(
             tts.get("chatterbox_expressiveness", data.get("chatterbox_expressiveness", 0.5))
         ),
@@ -390,6 +391,9 @@ class ApplicationService:
             if not api_key:
                 raise ValueError("Enter the ElevenLabs key in Settings before resuming this dub")
             saved["elevenlabs_api_key"] = api_key
+        # Older dub versions started without automatic source voices. Preserve
+        # their original voice choice when a failed job resumes after upgrade.
+        saved.setdefault("auto_voice_references", False)
         saved.update(resume=True, force=False, keep_work=True)
         config = config_from_dict(saved)
         config.version_id = dub_id

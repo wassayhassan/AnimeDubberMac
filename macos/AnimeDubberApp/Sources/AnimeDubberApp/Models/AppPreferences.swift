@@ -16,6 +16,7 @@ struct AppPreferences: Codable, Equatable {
     var fallbackVoice = ""
     var ttsRate = 210
     var chatterboxReferenceAudio = ""
+    var autoSourceVoices: Bool? = true
     var chatterboxExpressiveness = 0.5
     var chatterboxDevice = "auto"
     var chatterboxTurbo = true
@@ -87,6 +88,7 @@ struct SettingsSnapshot: Equatable {
     let fallbackVoice: String
     let ttsRate: Int
     let chatterboxReferenceAudio: String
+    let autoSourceVoices: Bool
     let chatterboxExpressiveness: Double
     let chatterboxDevice: String
     let chatterboxTurbo: Bool

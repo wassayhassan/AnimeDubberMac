@@ -110,6 +110,16 @@ struct NewDubView: View {
                     Toggle("Detect separate speakers", isOn: $state.detectCharacters)
                 }
 
+                if state.detectCharacters && state.outputMode == .dub && state.targetLanguage == "en" &&
+                    (state.voiceProvider == .chatterbox || state.voiceProvider == .auto) {
+                    settingRow("Source voices") {
+                        Toggle("Choose character voice clips automatically", isOn: $state.autoSourceVoices)
+                    }
+                    Text("Analyze Characters first to listen to the selected clips and change any match before generating a dub. Unclear voices use the default voice.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 if state.targetLanguage != "en" {
                     Text("Other languages use an LLM or Ollama for translation. Dubbing currently requires an ElevenLabs multilingual voice; subtitles work without one.")
                         .font(.caption).foregroundStyle(.secondary)
