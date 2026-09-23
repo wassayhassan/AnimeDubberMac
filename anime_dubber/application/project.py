@@ -313,7 +313,7 @@ class ProjectStore:
         }
         artifacts = dict(payload.get("artifacts") or {})
         for kind, value in list(artifacts.items()):
-            if Path(str(value)).is_relative_to(version_root):
+            if Path(str(value)).resolve().is_relative_to(version_root):
                 replacement = next((other.get("artifacts", {}).get(kind)
                                     for other in reversed(payload["dubs"])
                                     if other.get("artifacts", {}).get(kind)), None)

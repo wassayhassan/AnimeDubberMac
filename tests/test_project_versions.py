@@ -9,6 +9,8 @@ from anime_dubber.application.service import ApplicationService
 from anime_dubber.core import Config, Segment, run_pipeline, translate_with_llm, LLM_MODEL, CommandRunner
 import hashlib
 import json
+import sys
+import types
 
 
 class ProjectVersionsTests(unittest.TestCase):
@@ -240,11 +242,17 @@ class ProjectVersionsTests(unittest.TestCase):
                 segments[0].translated = "Hello"
                 return segments
 
+            def fail_analysis(*_args, **_kwargs):
+                raise RuntimeError("speaker model failed")
+
+            character_module = types.ModuleType("anime_dubber.characters")
+            character_module.analyze_characters = fail_analysis
+            character_module.write_character_map = lambda *_args: None
             with patch("anime_dubber.core.extract_audio", return_value=audio), \
                  patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
                  patch("anime_dubber.core.transcribe_audio", return_value=[Segment(0, 1, "你好")]), \
                  patch("anime_dubber.core.translate_with_llm", side_effect=translation), \
-                 patch("anime_dubber.characters.analyze_characters", side_effect=RuntimeError("speaker model failed")):
+                 patch.dict(sys.modules, {"anime_dubber.characters": character_module}):
                 with self.assertRaisesRegex(RuntimeError, "speaker model failed"):
                     service.run_sync({"source": str(video), "output_dir": temp,
                                       "translation": "llm", "tts_engine": "chatterbox"})
