@@ -19,6 +19,9 @@ struct DubDetailsView: View {
         let suggestion: String
         let alternate: String
         let reasons: [String]
+        let duration: Double?
+        let available: Double?
+        let error: String
     }
 
     private var dub: DubSummary? { state.currentProject?.dubs.first { $0.id == dubID } }
@@ -79,15 +82,20 @@ struct DubDetailsView: View {
                     if dub.status == "paused" && dub.error == "Subtitle review required before voice generation" {
                         GroupBox("Review Subtitles Before Dubbing") {
                             VStack(alignment: .leading, spacing: 14) {
-                                Text("Larger models checked the priority lines. Compare the original, current translation, and proposed wording. Editing here changes the subtitle and the voice generated for that cue.")
+                                Text("Compare the source and translation. Use a shorter suggestion if one is available, or edit the wording yourself. The app checks the generated voice duration again when you continue.")
                                     .foregroundStyle(.secondary)
                                 if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
                                 ForEach(reviewCues) { cue in
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("Cue \(cue.id) · \(cue.reasons.joined(separator: ", ").replacingOccurrences(of: "_", with: " "))")
                                             .font(.caption).foregroundStyle(.secondary)
+                                        if let duration = cue.duration, let available = cue.available {
+                                            Text(String(format: "Voice takes %.2f seconds; %.2f seconds available before the next line.", duration, available))
+                                                .font(.caption).foregroundStyle(.orange)
+                                        }
                                         Text(cue.source).textSelection(.enabled)
                                         Text("Current: \(cue.translation)").font(.callout)
+                                        if !cue.error.isEmpty { Text(cue.error).font(.caption).foregroundStyle(.orange) }
                                         if !cue.alternate.isEmpty {
                                             Text("Alternate transcription (unverified): \(cue.alternate)")
                                                 .font(.caption).foregroundStyle(.orange)
@@ -105,8 +113,10 @@ struct DubDetailsView: View {
                                                 }.buttonStyle(.link)
                                             }
                                             Spacer()
-                                            Button("Use original") { reviewDraft[cue.id] = cue.translation }
-                                                .buttonStyle(.link)
+                                            if !cue.reasons.contains("speech_overlap") {
+                                                Button("Use original") { reviewDraft[cue.id] = cue.translation }
+                                                    .buttonStyle(.link)
+                                            }
                                         }.font(.caption)
                                     }
                                     Divider()
@@ -256,14 +266,19 @@ struct DubDetailsView: View {
             return
         }
         let selected = Set(priority)
+        let timing = report["timing_issues"] as? [String: [String: Any]] ?? [:]
         reviewMessage = report["review_error"] as? String ?? ""
         reviewCues = flags.compactMap { row in
             guard let cue = row["cue"] as? Int, selected.contains(cue) else { return nil }
+            let issue = timing[String(cue)] ?? [:]
             return ReviewCue(id: cue, source: row["source"] as? String ?? "",
                              translation: row["translation"] as? String ?? "",
                              suggestion: row["suggestion"] as? String ?? "",
                              alternate: row["asr_candidate"] as? String ?? "",
-                             reasons: row["reasons"] as? [String] ?? [])
+                             reasons: row["reasons"] as? [String] ?? [],
+                             duration: issue["duration"] as? Double,
+                             available: issue["available"] as? Double,
+                             error: row["review_error"] as? String ?? "")
         }
         for cue in reviewCues { reviewDraft[cue.id] = cue.translation }
     }

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import subprocess
 import tempfile
@@ -154,7 +155,7 @@ def review_subtitles(
                             "source": a["text"],
                             "translation": issue.get("attempted_translation", b["text"]) if issue else b["text"],
                             "reasons": reasons,
-                            **{key: row[key] for key in ("suggestion", "asr_candidate")
+                            **{key: row[key] for key in ("suggestion", "asr_candidate", "review_error")
                                if row.get(key) and (not issue or row.get("translation") == issue.get("attempted_translation"))}})
     # Speed alone is common in short anime subtitle cues. Prioritize obvious
     # language errors and the worst timing cases for expensive model calls.
@@ -210,6 +211,17 @@ def review_subtitles(
             glossary_text = glossary_string(glossary)
             for n, row in enumerate(pending, 1):
                 idx = row["cue"] - 1
+                issue = timing_issues.get(row["cue"])
+                if issue and issue.get("duration") and issue.get("available"):
+                    available = max(0.1, float(issue["available"]))
+                    generated = max(0.1, float(issue["duration"]))
+                    word_count = len(row["translation"].split())
+                    target_words = max(3, math.floor(word_count * min(1.0, available / generated) * 0.8))
+                    timing_instruction = (f"Generated speech took {generated:.2f}s; only {available:.2f}s "
+                                          f"is free before the next voice. Aim for at most {target_words} "
+                                          "English words, preserve the meaning, and do not omit names or key facts.")
+                else:
+                    timing_instruction = f"Subtitle time window: {row['end'] - row['start']:.2f}s."
                 neighbors = [{"source": source[j]["text"], "translation": target[j]["text"]}
                              for j in range(max(0, idx - 2), min(len(source), idx + 3)) if j != idx]
                 prompt = (
@@ -221,7 +233,7 @@ def review_subtitles(
                     f"Source: {row['source']}\n"
                     f"Alternate transcription (unverified): {row.get('asr_candidate', '')}\n"
                     f"Existing translation: {row['translation']}\n"
-                    f"Time available: {row['end'] - row['start']:.2f}s\n"
+                    f"{timing_instruction}\n"
                     f"Flagged for: {', '.join(row['reasons'])}"
                 )
                 if getattr(tokenizer, "chat_template", None) is not None:

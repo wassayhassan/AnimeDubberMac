@@ -2181,19 +2181,45 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                                    "available": round(issue.available, 3)}
             _atomic_json_write(timing_path, issues)
             progress(f"Warning: {issue}")
+            review_errors = []
             try:
                 review_subtitles(zh_srt, en_srt, review_path, language=config.target_language,
                                  context=config.context, glossary=config.glossary, progress=progress)
                 if platform.system() == "Darwin" and platform.machine() == "arm64":
-                    runner.run([sys.executable, "-m", "anime_dubber.cli", "review-subtitles",
-                                str(zh_srt), str(en_srt), "--report", str(review_path),
-                                "--target-language", config.target_language, "--model", config.review_model,
-                                "--cue", str(i + 1), "--context", config.context,
-                                "--glossary-json", json.dumps(config.glossary, ensure_ascii=False)])
+                    models = list(dict.fromkeys((config.review_model, config.llm_model)))
+                    for model in models:
+                        try:
+                            progress(f"Suggesting shorter wording for line {i + 1} with {model}…")
+                            runner.run([sys.executable, "-m", "anime_dubber.cli", "review-subtitles",
+                                        str(zh_srt), str(en_srt), "--report", str(review_path),
+                                        "--target-language", config.target_language, "--model", model,
+                                        "--cue", str(i + 1), "--context", config.context,
+                                        "--glossary-json", json.dumps(config.glossary, ensure_ascii=False)])
+                            current = json.loads(review_path.read_text(encoding="utf-8"))
+                            row = next((r for r in current.get("flags", []) if r.get("cue") == i + 1), {})
+                            suggestion = str(row.get("suggestion") or "").strip()
+                            if suggestion and len(suggestion) < len(issue.translation) * 0.9:
+                                break
+                            review_errors.append(f"{model}: no substantially shorter suggestion")
+                        except CancelledError:
+                            raise
+                        except (PipelineError, OSError, ValueError) as exc:
+                            review_errors.append(f"{model}: {str(exc).splitlines()[-1][:300]}")
+                else:
+                    review_errors.append("Automatic local suggestions require an Apple silicon Mac")
             except CancelledError:
                 raise
             except (PipelineError, OSError, ValueError, ImportError, RuntimeError) as exc:
-                progress(f"Warning: stronger timing review could not finish: {exc}")
+                review_errors.append(str(exc))
+            if review_errors:
+                current = json.loads(review_path.read_text(encoding="utf-8"))
+                row = next((r for r in current.get("flags", []) if r.get("cue") == i + 1), {})
+                if not row.get("suggestion") or len(str(row["suggestion"])) >= len(issue.translation) * 0.9:
+                    current["review_error"] = (f"No usable shorter suggestion for line {i + 1}. "
+                                               "Edit the line manually. "
+                                               + "; ".join(review_errors))
+                    _atomic_json_write(review_path, current)
+                    progress(f"Warning: {current['review_error']}")
             publish("review_report", review_path, config.target_language)
             raise ReviewRequired("Subtitle review required before voice generation") from issue
         if timing_path.exists():
