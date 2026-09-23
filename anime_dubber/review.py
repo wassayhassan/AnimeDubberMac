@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable, Mapping
 
-from .core import DEFAULT_CONTEXT, DEFAULT_GLOSSARY, _atomic_json_write, glossary_string, parse_translation_response
+from .core import DEFAULT_CONTEXT, DEFAULT_GLOSSARY, _atomic_json_write, _response_text, glossary_string, parse_translation_response
 
 
 TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,\.](\d{3})")
@@ -224,10 +224,18 @@ def review_subtitles(
                     timing_instruction = f"Subtitle time window: {row['end'] - row['start']:.2f}s."
                 neighbors = [{"source": source[j]["text"], "translation": target[j]["text"]}
                              for j in range(max(0, idx - 2), min(len(source), idx + 3)) if j != idx]
+                source_mismatch = "non_chinese_source" in row["reasons"]
+                source_guidance = (
+                    "The source transcript is not Mandarin and may be a recognition error. "
+                    "If the alternate Mandarin transcript is plausible, translate that instead; "
+                    "treat it as unverified, and do not infer extra words from context. "
+                    if source_mismatch else ""
+                )
                 prompt = (
                     f"Check this {language} subtitle against its Chinese source. Suggest a short, natural translation "
                     "that fits the timing. Do not invent missing source speech. Return ONLY a JSON array "
                     f"with one object: {{\"id\": {row['cue']}, \"text\": \"suggestion\"}}.\n"
+                    f"{source_guidance}"
                     f"Context: {context}\nGlossary: {glossary_text}\n"
                     f"Neighboring cues: {json.dumps(neighbors, ensure_ascii=False)}\n"
                     f"Source: {row['source']}\n"
@@ -246,11 +254,48 @@ def review_subtitles(
                 else:
                     rendered = prompt
                 response = generate(llm, tokenizer, prompt=rendered, max_tokens=256, verbose=False)
-                parsed = parse_translation_response(getattr(response, "text", response), [row["cue"]])
-                if parsed.get(row["cue"]):
-                    row["suggestion"] = parsed[row["cue"]]
+                parsed = parse_translation_response(_response_text(response), [row["cue"]])
+                suggestion = parsed.get(row["cue"], "")
+                unchanged_mismatch = (source_mismatch and HAN.search(row.get("asr_candidate", ""))
+                                      and suggestion.casefold().strip() == row["translation"].casefold().strip())
+                if not suggestion or unchanged_mismatch or (language == "en" and HAN.search(suggestion)):
+                    # Smaller local models sometimes answer in prose instead of JSON.
+                    # Retry this cue once with a simpler format before asking for a manual decision.
+                    suggestion = ""
+                    alternate = row.get("asr_candidate", "")
+                    retry_prompt = (
+                        f"Translate only the Mandarin speech into natural {language}. "
+                        "Return only one short translated line; no JSON, notes, or explanation.\n"
+                        f"Mandarin transcription: {alternate if source_mismatch and HAN.search(alternate) else row['source']}\n"
+                        f"Unverified existing translation: {row['translation']}\n"
+                        f"Context: {context}\n{timing_instruction}"
+                    )
+                    if getattr(tokenizer, "chat_template", None) is not None:
+                        try:
+                            retry_prompt = tokenizer.apply_chat_template(
+                                [{"role": "user", "content": retry_prompt}],
+                                add_generation_prompt=True, enable_thinking=False)
+                        except TypeError:
+                            retry_prompt = tokenizer.apply_chat_template(
+                                [{"role": "user", "content": retry_prompt}], add_generation_prompt=True)
+                    retry = _response_text(generate(llm, tokenizer, prompt=retry_prompt,
+                                                   max_tokens=128, verbose=False)).strip()
+                    retry = re.sub(r"^```[^\n]*\n|\n```$", "", retry).strip().strip('"')
+                    if (retry and len(retry.splitlines()) == 1 and len(retry) <= 200
+                            and not retry.startswith(("{", "[", "<"))
+                            and not (language == "en" and HAN.search(retry))
+                            and not (source_mismatch and HAN.search(alternate)
+                                     and retry.casefold() == row["translation"].casefold())):
+                        suggestion = retry
+                if suggestion:
+                    row["suggestion"] = suggestion
+                    row.pop("review_error", None)
                 else:
-                    row["review_error"] = "Model did not return a valid suggestion; retry on next run"
+                    row["review_error"] = (
+                        "Source transcription may be wrong; check the audio and edit this line before approving."
+                        if source_mismatch else
+                        "The model could not suggest wording; edit this line or keep the original after checking it."
+                    )
                 result["timing_seconds"]["review_generation"] = round(time.monotonic() - generation_start, 2)
                 _atomic_json_write(report_path, result)
                 progress(f"Selective review: {n}/{len(pending)} flagged cues")

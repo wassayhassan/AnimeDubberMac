@@ -291,6 +291,52 @@ class ReviewTests(unittest.TestCase):
             self.assertIn("non_chinese_source", result["flags"][0]["reasons"])
             self.assertEqual(result["sampled_cues"], 1)
 
+    def test_review_retries_bad_model_format_using_alternate_mandarin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            a, b, report, audio = (base / name for name in
+                                   ("zh.srt", "en.srt", "en.review.json", "dialogue.wav"))
+            a.write_text(srt(["behold"]), encoding="utf-8")
+            b.write_text(srt(["Behold"]), encoding="utf-8")
+            audio.write_bytes(b"audio")
+            prompts = []
+
+            def generate(*_args, **kwargs):
+                prompts.append(kwargs["prompt"])
+                return "unparseable model output" if len(prompts) == 1 else "You"
+
+            with patch.dict(sys.modules, {
+                "mlx_whisper": type("FakeASR", (), {
+                    "transcribe": staticmethod(lambda *_a, **_k: {"text": "你"})})(),
+                "mlx_lm": type("FakeLLM", (), {
+                    "load": staticmethod(lambda _m: (object(), type("Tokenizer", (), {"chat_template": None})())),
+                    "generate": staticmethod(generate)})(),
+            }), patch("anime_dubber.review.subprocess.run"):
+                result = review_subtitles(a, b, report, audio=audio, model="test")
+            self.assertEqual(result["flags"][0]["asr_candidate"], "你")
+            self.assertEqual(result["flags"][0]["suggestion"], "You")
+            self.assertNotIn("review_error", result["flags"][0])
+            self.assertEqual(len(prompts), 2)
+            self.assertIn("source transcript is not Mandarin", prompts[0])
+            self.assertIn("Mandarin transcription: 你", prompts[1])
+
+            prompts.clear()
+            def unchanged(*_args, **kwargs):
+                prompts.append(kwargs["prompt"])
+                return '[{"id": 1, "text": "Behold"}]' if len(prompts) == 1 else "You"
+            with patch.dict(sys.modules, {
+                "mlx_lm": type("FakeLLM", (), {
+                    "load": staticmethod(lambda _m: (object(), type("Tokenizer", (), {"chat_template": None})())),
+                    "generate": staticmethod(unchanged)})(),
+            }):
+                # Keep the alternate transcription cached; force a fresh suggestion.
+                cached = json.loads(report.read_text(encoding="utf-8"))
+                cached["flags"][0].pop("suggestion")
+                report.write_text(json.dumps(cached), encoding="utf-8")
+                revised = review_subtitles(a, b, report, model="test")
+            self.assertEqual(revised["flags"][0]["suggestion"], "You")
+            self.assertEqual(len(prompts), 2)
+
     def test_review_pauses_before_voices_and_resume_applies_approved_cue(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
