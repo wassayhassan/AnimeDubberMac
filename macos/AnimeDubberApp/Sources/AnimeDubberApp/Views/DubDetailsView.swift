@@ -118,6 +118,9 @@ struct DubDetailsView: View {
                                     })
                                     if reviewCues.contains(where: { (reviewDraft[$0.id] ?? $0.translation).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
                                         reviewMessage = "An approved line cannot be empty."
+                                    } else if reviewCues.contains(where: { $0.reasons.contains("speech_overlap") &&
+                                        (reviewDraft[$0.id] ?? $0.translation).trimmingCharacters(in: .whitespacesAndNewlines) == $0.translation }) {
+                                        reviewMessage = "A line overlaps the next voice. Give it shorter wording before continuing."
                                     } else {
                                         state.approveReview(dub, revisions: revisions)
                                     }
@@ -271,7 +274,8 @@ struct DubDetailsView: View {
     }
 
     private func modelSuffix(_ config: [String: Any]) -> String {
-        guard let model = config["ollama_model"] as? String, config["translation"] as? String == "ollama" else { return "" }
+        let key = config["translation"] as? String == "ollama" ? "ollama_model" : "llm_model"
+        guard let model = config[key] as? String else { return "" }
         return " · \(model)"
     }
 

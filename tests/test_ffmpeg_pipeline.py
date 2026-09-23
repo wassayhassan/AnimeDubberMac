@@ -11,6 +11,7 @@ from anime_dubber.core import (
     CommandRunner,
     Config,
     Segment,
+    TimingOverlapError,
     ffprobe_duration,
     mix_background_and_dub,
     build_dialogue_safe_background,
@@ -58,7 +59,7 @@ class FfmpegPipelineTests(unittest.TestCase):
             self.assertIn("_processed.wav", first.name)
             self.assertEqual(synthesize.call_count, 1)
             self.assertGreater(ffprobe_duration(first, runner), 0.1)
-            self.assertLessEqual(ffprobe_duration(first, runner), 0.53)
+            self.assertTrue(1.9 <= ffprobe_duration(first, runner) <= 2.05)
             self.assertFalse(any((directory / "tts").glob("*_rendering.wav")))
 
     def test_timeline_and_music_sfx_mix_keep_duration(self):
@@ -193,7 +194,7 @@ class FfmpegPipelineTests(unittest.TestCase):
             self.assertTrue(timeline.exists())
             self.assertGreaterEqual(ffprobe_duration(timeline, runner), 0.99)
 
-    def test_tts_clip_cannot_overrun_source_dialogue_window(self):
+    def test_tts_keeps_natural_speech_in_gap_and_stops_before_next_voice(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             long_source = d / "long.wav"
@@ -209,18 +210,24 @@ class FfmpegPipelineTests(unittest.TestCase):
             cfg = Config(source="x", output_dir=d, tts_engine="macos", force=True)
             seg = Segment(5.0, 5.40, "你好", "Hello")
             runner = CommandRunner()
-            warnings = []
+            messages = []
             with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say), \
                  patch.object(runner, "run", wraps=runner.run) as commands:
-                clip = prepare_tts_clip(seg, 0, d / "tts", cfg, runner, warnings.append)
+                clip = prepare_tts_clip(seg, 0, d / "tts", cfg, runner, messages.append,
+                                        next_start=7.2)
 
             duration = ffprobe_duration(clip, runner)
-            self.assertLessEqual(duration, 0.43)
-            self.assertTrue(any("truncating speech" in message for message in warnings))
+            self.assertTrue(1.9 <= duration <= 2.05)
+            self.assertTrue(any("naturally" in message for message in messages))
             filters = [args[0][args[0].index("-af") + 1] for args, _ in
                        ((call.args, call.kwargs) for call in commands.call_args_list)
                        if "-af" in args[0]]
-            self.assertFalse(any("atempo=2." in item or "atempo=3." in item for item in filters))
+            self.assertFalse(any("atempo=" in item or "atrim=duration=" in item for item in filters))
+
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say):
+                with self.assertRaises(TimingOverlapError):
+                    prepare_tts_clip(seg, 1, d / "tts", cfg, CommandRunner(), messages.append,
+                                     next_start=5.8)
 
     def test_trailing_tts_silence_does_not_force_fast_speech(self):
         with tempfile.TemporaryDirectory() as td:

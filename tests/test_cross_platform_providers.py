@@ -20,6 +20,17 @@ from anime_dubber.providers.tts import (
 
 
 class CrossPlatformProviderTests(unittest.TestCase):
+    def test_mlx_model_selections_are_regular_job_settings(self):
+        cfg = config_from_dict({
+            "source": "input.mp4", "output_dir": "./out",
+            "asr": {"provider": "mlx_whisper", "mlx_model": "mlx-community/whisper-large-v3-mlx"},
+            "translation": {"provider": "llm", "llm_model": "mlx-community/Qwen3-8B-4bit"},
+            "review_model": "mlx-community/Qwen3-14B-4bit",
+        })
+        self.assertEqual(cfg.mlx_whisper_model, "mlx-community/whisper-large-v3-mlx")
+        self.assertEqual(cfg.llm_model, "mlx-community/Qwen3-8B-4bit")
+        self.assertEqual(cfg.review_model, "mlx-community/Qwen3-14B-4bit")
+
     def test_nested_provider_config(self):
         cfg = config_from_dict({
             "source": "input.mp4",

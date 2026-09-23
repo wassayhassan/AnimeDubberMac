@@ -256,6 +256,7 @@ Apple Silicon macOS:
 
 - ASR: MLX Whisper
 - translation: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
+- optional full Whisper Large v3 and Qwen3 8B/14B or experimental Qwen3.5 9B in New Dub and Settings
 - preferred local TTS: Chatterbox Turbo when installed
 - fast local TTS: Kokoro when installed
 - compatibility fallback: macOS `say`
@@ -313,3 +314,5 @@ The command prints elapsed model-load and review time and saves a `.review.json`
 For a new dub on Apple silicon, enable **Review flagged lines before voices** in New Dub, or pass `--review-before-dub` to the CLI. The app saves both SRTs, runs the larger local translation model and a second transcription of the most suspicious speech cues, then pauses before voice generation. In Dub Details, compare each priority cue and choose its wording, then select **Approve and Continue Dub**. An unchanged line keeps its original translation. The decision and model suggestions are saved per dub so interrupted review can resume without redoing transcription or translation. The setting is opt-in because the first model downloads and the review pass can add substantial time on a 16 GB Mac.
 
 For headless jobs, inspect the `*.review.json` file, then run `python -m anime_dubber.cli approve-review PROJECT_ID DUB_ID -o OUTPUT_DIR` to keep the original lines, or pass `--revisions corrections.json` with a JSON object such as `{"199": "Approved line"}`. Finally run `python -m anime_dubber.cli resume-dub PROJECT_ID DUB_ID -o OUTPUT_DIR`. If a stronger model fails, the job still pauses with the saved original subtitles and a warning; you can approve the original text or edit it before continuing.
+
+Voice clips now play at their generated pace and may continue beyond the subtitle end if there is room before the next cue. If a clip would overlap the next cue or run past the video's end, the dub pauses at that cue, saves the completed clips, and asks for a shorter translation. On Apple silicon it requests a stronger-model suggestion for that cue; its proposed wording still needs your review and the new voice duration is checked again on resume. No speech is accelerated or cut to fit. Select full Whisper Large v3 and a larger translation model in New Dub, or supply model IDs in Settings. A model choice starts applying to a new dub; an existing rendered video keeps its audio.

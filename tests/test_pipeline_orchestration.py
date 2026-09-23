@@ -92,7 +92,7 @@ class PipelineOrchestrationTests(unittest.TestCase):
             published = []
             runner = CommandRunner()
             runner.artifact = lambda kind, path, language: published.append((kind, Path(path).exists()))
-            def fake_tts(seg, index, tts_dir, config, runner, progress, profile=None):
+            def fake_tts(seg, index, tts_dir, config, runner, progress, profile=None, next_start=None):
                 self.assertIn(("translated_srt", True), published)
                 seen.append((seg.speaker_id, seg.style, (profile or {}).get("macos_voice")))
                 out = d / f"clip{index}.wav"; out.write_bytes(b"clip"); return out

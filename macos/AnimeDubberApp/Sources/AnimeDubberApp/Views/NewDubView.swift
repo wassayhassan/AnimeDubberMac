@@ -80,6 +80,17 @@ struct NewDubView: View {
                     .frame(width: 240)
                 }
 
+                if state.asrProvider != .fasterWhisper {
+                    settingRow("Whisper model") {
+                        Picker("Whisper model", selection: $state.mlxWhisperModel) {
+                            Text("Large v3 Turbo · faster").tag("mlx-community/whisper-large-v3-turbo")
+                            Text("Large v3 · stronger").tag("mlx-community/whisper-large-v3-mlx")
+                        }
+                        .labelsHidden()
+                        .frame(width: 240)
+                    }
+                }
+
                 Divider()
 
                 settingRow("Translation") {
@@ -90,6 +101,19 @@ struct NewDubView: View {
                     }
                     .labelsHidden()
                     .frame(width: 240)
+                }
+
+                if state.translationProvider == .llm || state.translationProvider == .auto {
+                    settingRow("Translation model") {
+                        Picker("Translation model", selection: $state.llmModel) {
+                            Text("Qwen3 4B · faster").tag("mlx-community/Qwen3-4B-Instruct-2507-4bit")
+                            Text("Qwen3 8B · stronger").tag("mlx-community/Qwen3-8B-4bit")
+                            Text("Qwen3.5 9B · experimental").tag("mlx-community/Qwen3.5-9B-MLX-4bit")
+                            Text("Qwen3 14B · high memory").tag("mlx-community/Qwen3-14B-4bit")
+                        }
+                        .labelsHidden()
+                        .frame(width: 240)
+                    }
                 }
 
                 Divider()
@@ -116,6 +140,15 @@ struct NewDubView: View {
                         Toggle("Review flagged lines before voices", isOn: $state.reviewBeforeDub)
                     }
                     if state.reviewBeforeDub {
+                        settingRow("Review model") {
+                            Picker("Review model", selection: $state.reviewModel) {
+                                Text("Qwen3 8B").tag("mlx-community/Qwen3-8B-4bit")
+                                Text("Qwen3.5 9B · experimental").tag("mlx-community/Qwen3.5-9B-MLX-4bit")
+                                Text("Qwen3 14B · high memory").tag("mlx-community/Qwen3-14B-4bit")
+                            }
+                            .labelsHidden()
+                            .frame(width: 240)
+                        }
                         Text("After subtitles are saved, larger local models check priority lines. The dub pauses so you can inspect their suggestions in Dub Details and approve or edit them. This downloads models on first use and adds processing time.")
                             .font(.caption).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)

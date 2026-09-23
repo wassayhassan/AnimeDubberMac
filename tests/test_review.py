@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from anime_dubber.core import CommandRunner, Config, ReviewRequired, Segment, run_pipeline
+from anime_dubber.core import CommandRunner, Config, ReviewRequired, Segment, TimingOverlapError, run_pipeline
 from anime_dubber.review import review_subtitles
 
 
@@ -18,6 +18,53 @@ def srt(texts):
 
 
 class ReviewTests(unittest.TestCase):
+    def test_natural_speech_overlap_pauses_for_edit_and_resumes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            video = base / "source.mp4"; video.write_bytes(b"video")
+            audio = base / "audio.wav"; audio.write_bytes(b"audio")
+            cfg = Config(source=str(video), output_dir=base / "out", version_id="dub_timing",
+                         translation="llm", multi_character=False, review_before_dub=False)
+            runner = CommandRunner()
+            generated = []
+
+            def transcribe(*_args, **_kwargs):
+                return [Segment(0, 0.5, "你好")]
+
+            def translate(items, *_args):
+                items[0].translated = "A long greeting"
+                return items
+
+            def prepare(seg, *_args, **_kwargs):
+                generated.append(seg.translated)
+                if seg.translated == "A long greeting":
+                    raise TimingOverlapError(0, 1.5, 1.0, seg.translated)
+                return audio
+
+            with patch("anime_dubber.core.download_source", return_value=video), \
+                 patch("anime_dubber.core.extract_audio", return_value=audio), \
+                 patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
+                 patch("anime_dubber.core.transcribe_audio", side_effect=transcribe), \
+                 patch("anime_dubber.core.translate_with_llm", side_effect=translate), \
+                 patch("anime_dubber.core.prepare_tts_clip", side_effect=prepare), \
+                 patch("anime_dubber.core.ffprobe_duration", return_value=1.0), \
+                 patch("anime_dubber.core.render_dub_timeline", return_value=audio), \
+                 patch("anime_dubber.core.build_dialogue_safe_background", return_value=audio), \
+                 patch("anime_dubber.core.mix_background_and_dub", return_value=audio), \
+                 patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
+                with self.assertRaises(ReviewRequired):
+                    run_pipeline(cfg, lambda _: None, runner)
+                report = next((base / "out" / "versions" / "dub_timing").glob("*.review.json"))
+                flagged = json.loads(report.read_text())
+                self.assertEqual(flagged["priority_cues"], [1])
+                self.assertIn("speech_overlap", flagged["flags"][0]["reasons"])
+                approval = report.with_name(report.name.replace(".review.json", ".review-approval.json"))
+                approval.write_text(json.dumps({"signature": flagged["signature"],
+                                                "revisions": {"1": "Hello"}}))
+                result = run_pipeline(cfg, lambda _: None, runner)
+            self.assertEqual(generated, ["A long greeting", "Hello"])
+            self.assertIn("Hello", result["translated_srt"].read_text())
+
     def test_flags_source_and_translation_without_changing_srt(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -60,6 +107,27 @@ class ReviewTests(unittest.TestCase):
             # Pipeline's fast flagging pass must retain an earlier model review.
             three = review_subtitles(a, b, report)
             self.assertEqual(three["flags"][0]["suggestion"], "Better line")
+
+    def test_focused_model_review_retains_all_priority_cues(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            a, b, report = base / "zh.srt", base / "en.srt", base / "review.json"
+            a.write_text(srt(["老六", "逼王"]), encoding="utf-8")
+            b.write_text(srt(["Old Six", "Force the King"]), encoding="utf-8")
+            class Tokenizer:
+                chat_template = None
+            prompts = []
+            def fake_generate(*args, **kwargs):
+                prompts.append(kwargs["prompt"])
+                return '[{"id": 2, "text": "Show-off"}]'
+            with patch.dict("sys.modules", {"mlx_lm": type("FakeMLX", (), {
+                "load": staticmethod(lambda _: (object(), Tokenizer())),
+                "generate": staticmethod(fake_generate),
+            })()}):
+                result = review_subtitles(a, b, report, model="test", focus_cues={2})
+            self.assertEqual(result["priority_cues"], [1, 2])
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(result["flags"][1]["suggestion"], "Show-off")
 
     def test_non_chinese_source_is_prioritized_for_retranscription(self):
         with tempfile.TemporaryDirectory() as temp:

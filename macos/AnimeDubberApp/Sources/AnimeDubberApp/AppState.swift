@@ -16,11 +16,14 @@ final class AppState: ObservableObject {
     @Published var outputMode: OutputMode = .dub
 
     @Published var asrProvider: ASRProvider = .auto
+    @Published var mlxWhisperModel = "mlx-community/whisper-large-v3-turbo"
     @Published var fasterWhisperModel = "large-v3"
     @Published var fasterWhisperDevice = "auto"
     @Published var fasterWhisperComputeType = "auto"
 
     @Published var translationProvider: TranslationProvider = .llm
+    @Published var llmModel = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    @Published var reviewModel = "mlx-community/Qwen3-8B-4bit"
     @Published var ollamaURL = "http://127.0.0.1:11434"
     @Published var ollamaModel = "qwen3:4b"
 
@@ -101,10 +104,13 @@ final class AppState: ObservableObject {
             seriesID: seriesID,
             outputMode: outputMode,
             asrProvider: asrProvider,
+            mlxWhisperModel: mlxWhisperModel,
             fasterWhisperModel: fasterWhisperModel,
             fasterWhisperDevice: fasterWhisperDevice,
             fasterWhisperComputeType: fasterWhisperComputeType,
             translationProvider: translationProvider,
+            llmModel: llmModel,
+            reviewModel: reviewModel,
             ollamaURL: ollamaURL,
             ollamaModel: ollamaModel,
             voiceProvider: voiceProvider,
@@ -138,10 +144,13 @@ final class AppState: ObservableObject {
             seriesID: seriesID,
             outputMode: outputMode.rawValue,
             asrProvider: asrProvider.rawValue,
+            mlxWhisperModel: mlxWhisperModel,
             fasterWhisperModel: fasterWhisperModel,
             fasterWhisperDevice: fasterWhisperDevice,
             fasterWhisperComputeType: fasterWhisperComputeType,
             translationProvider: translationProvider.rawValue,
+            llmModel: llmModel,
+            reviewModel: reviewModel,
             ollamaURL: ollamaURL,
             ollamaModel: ollamaModel,
             voiceProvider: voiceProvider.rawValue,
@@ -191,10 +200,13 @@ final class AppState: ObservableObject {
         seriesID = preferences.seriesID
         outputMode = OutputMode(rawValue: preferences.outputMode) ?? .dub
         asrProvider = ASRProvider(rawValue: preferences.asrProvider) ?? .auto
+        mlxWhisperModel = preferences.mlxWhisperModel ?? mlxWhisperModel
         fasterWhisperModel = preferences.fasterWhisperModel
         fasterWhisperDevice = preferences.fasterWhisperDevice
         fasterWhisperComputeType = preferences.fasterWhisperComputeType
         translationProvider = TranslationProvider(rawValue: preferences.translationProvider) ?? .llm
+        llmModel = preferences.llmModel ?? llmModel
+        reviewModel = preferences.reviewModel ?? reviewModel
         ollamaURL = preferences.ollamaURL
         ollamaModel = preferences.ollamaModel
         voiceProvider = VoiceProvider(rawValue: preferences.voiceProvider) ?? .auto
@@ -283,12 +295,14 @@ final class AppState: ObservableObject {
             "dub_name": dubName,
             "asr": [
                 "provider": asrProvider.rawValue,
+                "mlx_model": mlxWhisperModel,
                 "model": fasterWhisperModel,
                 "device": fasterWhisperDevice,
                 "compute_type": fasterWhisperComputeType,
             ],
             "translation": [
                 "provider": translationProvider.rawValue,
+                "llm_model": llmModel,
                 "ollama_url": ollamaURL,
                 "model": ollamaModel,
             ],
@@ -321,6 +335,7 @@ final class AppState: ObservableObject {
             "context": seriesContext,
             "resume": resumeCachedWork,
             "review_before_dub": reviewBeforeDub,
+            "review_model": reviewModel,
         ]
 
         do {
@@ -451,6 +466,9 @@ final class AppState: ObservableObject {
         voiceProvider = VoiceProvider(rawValue: config["tts_engine"] as? String ?? "") ?? voiceProvider
         asrProvider = ASRProvider(rawValue: config["asr_provider"] as? String ?? "") ?? asrProvider
         fasterWhisperModel = config["faster_whisper_model"] as? String ?? fasterWhisperModel
+        mlxWhisperModel = config["mlx_whisper_model"] as? String ?? mlxWhisperModel
+        llmModel = config["llm_model"] as? String ?? llmModel
+        reviewModel = config["review_model"] as? String ?? reviewModel
         ollamaModel = config["ollama_model"] as? String ?? ollamaModel
         ollamaURL = config["ollama_url"] as? String ?? ollamaURL
         fallbackVoice = config["voice"] as? String ?? fallbackVoice

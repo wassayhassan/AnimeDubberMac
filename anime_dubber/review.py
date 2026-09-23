@@ -103,6 +103,7 @@ def review_subtitles(
     asr_model: str = "mlx-community/whisper-large-v3-mlx",
     max_lines: int = 0,
     sample_seconds: float = 0,
+    focus_cues: set[int] | None = None,
     progress: Callable[[str], None] = print,
 ) -> dict:
     """Flag suspect cues, optionally ask a larger local LLM for suggestions.
@@ -133,15 +134,28 @@ def review_subtitles(
     existing = {}
     if isinstance(previous, dict) and previous.get("signature") == signature:
         existing = {item["cue"]: item for item in previous.get("flags", []) if isinstance(item, dict) and "cue" in item}
+    timing_path = report_path.with_name(report_path.name.replace(".review.json", ".timing.json"))
+    try:
+        timing_data = json.loads(timing_path.read_text(encoding="utf-8")) if timing_path.exists() else {}
+    except (OSError, ValueError):
+        timing_data = {}
+    timing_issues = {int(key): value for key, value in timing_data.items()
+                     if str(key).isdigit() and isinstance(value, dict)
+                     and 1 <= int(key) <= len(target)}
     flagged = []
     for idx, (a, b) in enumerate(zip(source, target), start=1):
         reasons = flags_for(a, b, language)
+        issue = timing_issues.get(idx)
+        if issue:
+            reasons.append("speech_overlap")
         if reasons:
             row = existing.get(idx, {})
             flagged.append({"cue": idx, "start": b["start"], "end": b["end"],
-                            "source": a["text"], "translation": b["text"],
+                            "source": a["text"],
+                            "translation": issue.get("attempted_translation", b["text"]) if issue else b["text"],
                             "reasons": reasons,
-                            **{key: row[key] for key in ("suggestion", "asr_candidate") if row.get(key)}})
+                            **{key: row[key] for key in ("suggestion", "asr_candidate")
+                               if row.get(key) and (not issue or row.get("translation") == issue.get("attempted_translation"))}})
     # Speed alone is common in short anime subtitle cues. Prioritize obvious
     # language errors and the worst timing cases for expensive model calls.
     selected = [row for row in flagged if (not sample_seconds or row["start"] < sample_seconds)
@@ -154,6 +168,7 @@ def review_subtitles(
               "audio_identity": audio_identity, "asr_model": signature_asr_model,
               "total_cues": len(source), "flagged_cues": len(flagged),
               "sampled_cues": len(selected), "priority_cues": [row["cue"] for row in selected],
+              "timing_issues": timing_issues,
               "flags": flagged,
               "timing_seconds": {}}
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,7 +176,8 @@ def review_subtitles(
     if audio:
         import mlx_whisper
         asr_start = time.monotonic()
-        pending_asr = [row for row in selected if not row.get("asr_candidate") and
+        pending_asr = [row for row in selected if (focus_cues is None or row["cue"] in focus_cues)
+                       and not row.get("asr_candidate") and
                        any(reason in row["reasons"] for reason in
                            ("mixed_script_in_source", "non_chinese_source",
                             "untranslated_text", "untranslated_chinese"))]
@@ -183,7 +199,8 @@ def review_subtitles(
                 progress(f"Alternate transcription: {n}/{len(pending_asr)} flagged cues")
     if model:
         from mlx_lm import generate, load
-        pending = [row for row in selected if not row.get("suggestion")]
+        pending = [row for row in selected if (focus_cues is None or row["cue"] in focus_cues)
+                   and not row.get("suggestion")]
         if pending:
             load_start = time.monotonic()
             progress(f"Loading selective review model: {model}")
