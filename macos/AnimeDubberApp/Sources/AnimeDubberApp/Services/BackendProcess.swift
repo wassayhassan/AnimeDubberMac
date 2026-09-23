@@ -61,6 +61,14 @@ final class BackendProcess {
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONUNBUFFERED"] = "1"
         environment["PYTHONPATH"] = backendRoot.path
+        var searchPaths = (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+            .split(separator: ":").map(String.init)
+        for directory in ["/usr/local/bin", "/opt/homebrew/bin"] {
+            if FileManager.default.fileExists(atPath: directory), !searchPaths.contains(directory) {
+                searchPaths.insert(directory, at: 0)
+            }
+        }
+        environment["PATH"] = searchPaths.joined(separator: ":")
         process.environment = environment
 
         process.standardInput = input

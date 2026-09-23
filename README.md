@@ -53,10 +53,10 @@ cd /path/to/AnimeDubberMac
 /bin/zsh setup.sh
 ```
 
-Setup installs the Python dependencies, runs the tests and backend checks, then updates an existing app in `/Applications` or `~/Applications`. If neither exists, it installs:
+Setup installs the Python dependencies, runs the tests and backend checks, then installs the app at:
 
 ```text
-~/Applications/AnimeDubber.app
+/Applications/AnimeDubber.app
 ```
 
 Open it normally from Finder or Spotlight.
@@ -67,7 +67,7 @@ To rebuild only the native app:
 /bin/zsh macos/package_app.sh --install
 ```
 
-Installing removes the temporary app bundle from `dist` after the install succeeds.
+Installing removes the temporary app bundle from `dist` and any old copy in `~/Applications` after the install succeeds.
 Run `macos/package_app.sh` without `--install` if you want an app bundle in `dist`.
 
 To build, install, and immediately open it:
@@ -76,10 +76,10 @@ To build, install, and immediately open it:
 /bin/zsh macos/package_app.sh --install --open
 ```
 
-If both locations contain an app, the installer asks for an explicit destination instead of guessing. To replace an app elsewhere, pass its full path, for example:
+To install elsewhere, pass the full destination path, for example:
 
 ```bash
-zsh macos/package_app.sh --install-to "/Applications/AnimeDubber.app" --open
+zsh macos/package_app.sh --install-to "$HOME/Applications/AnimeDubber.app" --open
 ```
 
 Run `zsh macos/package_app.sh --install --print-install-target` to see the location the installer would update. Quit the running app before rebuilding it.

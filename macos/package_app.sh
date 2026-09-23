@@ -40,9 +40,9 @@ Usage: ./macos/package_app.sh [options]
 
 Options:
   --no-embed-venv  Build a lightweight app bundle for CI/development.
-  --install        Update the existing app in /Applications or ~/Applications.
-                   Install to ~/Applications if no copy exists in either location.
-  --install-to PATH  Update a specific .app (use this if several copies exist).
+  --install        Install to /Applications, replacing the existing app there.
+                   Remove an old ~/Applications copy after installation succeeds.
+  --install-to PATH  Install to a specific .app instead.
   --print-install-target  Show the selected destination without building.
   --open           Open the app after packaging/installing.
   --no-sign        Skip local ad-hoc code signing.
@@ -56,32 +56,24 @@ done
 
 TARGET="$APP"
 if [[ "$INSTALL" -eq 1 ]]; then
+  TARGET="/Applications/AnimeDubber.app"
   if [[ -n "$INSTALL_TO" ]]; then
     if [[ "$INSTALL_TO" != /* || "$INSTALL_TO" != *.app ]]; then
       echo "ERROR: --install-to must be an absolute path ending in .app" >&2
       exit 2
     fi
     TARGET="$INSTALL_TO"
-  else
-    EXISTING=()
-    for CANDIDATE in "/Applications/AnimeDubber.app" "$HOME/Applications/AnimeDubber.app"; do
-      if [[ -d "$CANDIDATE" ]]; then EXISTING+=("$CANDIDATE"); fi
-    done
-    if [[ ${#EXISTING[@]} -gt 1 ]]; then
-      echo "ERROR: Multiple AnimeDubber apps found. Choose the original with --install-to PATH:" >&2
-      printf '  %s\n' "${EXISTING[@]}" >&2
-      exit 2
-    elif [[ ${#EXISTING[@]} -eq 1 ]]; then
-      TARGET="${EXISTING[1]}"
-    else
-      TARGET="$HOME/Applications/AnimeDubber.app"
-    fi
   fi
   echo "App installation target: $TARGET"
 fi
 if [[ "$PRINT_TARGET" -eq 1 ]]; then
   echo "$TARGET"
   exit 0
+fi
+
+if [[ "$INSTALL" -eq 1 && "$TARGET" == "/Applications/AnimeDubber.app" && ! -w /Applications ]]; then
+  echo "ERROR: This account cannot write to /Applications. Build without --install, then move dist/AnimeDubber.app into /Applications using Finder." >&2
+  exit 1
 fi
 
 if ! command -v swift >/dev/null 2>&1; then
@@ -187,6 +179,10 @@ if [[ "$INSTALL" -eq 1 ]]; then
   if mv "$STAGED" "$TARGET"; then
     if [[ -e "$BACKUP" ]]; then rm -rf "$BACKUP"; fi
     if [[ "$TARGET" != "$APP" ]]; then rm -rf "$APP"; fi
+    if [[ -z "$INSTALL_TO" && -e "$HOME/Applications/AnimeDubber.app" ]]; then
+      rm -rf "$HOME/Applications/AnimeDubber.app"
+      echo "Removed old copy: $HOME/Applications/AnimeDubber.app"
+    fi
     echo "Updated: $TARGET"
   else
     if [[ -e "$BACKUP" ]]; then mv "$BACKUP" "$TARGET"; fi
