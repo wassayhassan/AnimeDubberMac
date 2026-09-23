@@ -68,6 +68,10 @@ class CancelledError(PipelineError):
     pass
 
 
+class ReviewRequired(CancelledError):
+    """A dub has finished subtitle review and awaits an explicit decision."""
+
+
 ProgressCallback = Callable[[str], None]
 
 
@@ -150,6 +154,8 @@ class Config:
     speaker_threshold: float = 0.0
     series_id: str = ""
     speaker_backend: str = "auto"  # auto|ecapa|acoustic
+    review_before_dub: bool = False
+    review_model: str = "mlx-community/Qwen3-8B-4bit"
 
 
 class CommandRunner:
@@ -1940,6 +1946,8 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             translation_mode = "ollama" if config.target_language != "en" else "whisper"
     if config.target_language != "en" and translation_mode == "whisper":
         raise PipelineError("Whisper direct translation only supports English; choose LLM or Ollama.")
+    if config.review_before_dub and config.mode == "dub" and translation_mode == "whisper":
+        raise PipelineError("Automatic subtitle review needs line-aligned LLM or Ollama translation. Choose one of those providers or turn off review.")
 
     if translation_mode == "llm":
         segments = translate_with_llm(zh_segments, config, work, runner, progress)
@@ -1963,6 +1971,57 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                                 "translated_srt": en_srt, "translated_vtt": en_vtt}
     if config.target_language == "en":
         results["english_srt"] = en_srt
+
+    # Publish a fast, nonblocking quality report at the subtitle boundary.
+    # Stronger model suggestions can be added to this report later with the CLI
+    # without rerunning transcription, translation, or TTS.
+    from .review import review_subtitles
+    review_path = en_srt.with_suffix(".review.json")
+    approval_path = version_dir / f"{key}_{config.target_language}.review-approval.json"
+    try:
+        review = review_subtitles(zh_srt, en_srt, review_path, language=config.target_language,
+                                  context=config.context, glossary=config.glossary,
+                                  progress=progress)
+        results["review_report"] = review_path
+        publish("review_report", review_path, config.target_language)
+        progress(f"Subtitle review: {review['flagged_cues']} cues flagged; report: {review_path}")
+    except (OSError, ValueError) as exc:
+        progress(f"Warning: subtitle review skipped: {exc}")
+        if config.review_before_dub and config.mode == "dub":
+            raise PipelineError(f"Cannot prepare subtitle review: {exc}") from exc
+
+    if config.review_before_dub and config.mode == "dub" and review["priority_cues"]:
+        from .review import approved_revisions
+        decisions = approved_revisions(approval_path, review, len(segments))
+        if decisions is None:
+            if platform.system() != "Darwin" or platform.machine() != "arm64":
+                raise PipelineError("Automatic MLX review requires an Apple silicon Mac. Disable review or run the CLI review separately.")
+            progress("Reviewing flagged subtitles with stronger local models…")
+            args = [sys.executable, "-m", "anime_dubber.cli", "review-subtitles", str(zh_srt),
+                    str(en_srt), "--report", str(review_path), "--target-language", config.target_language,
+                    "--model", config.review_model, "--audio", str(transcript_audio),
+                    "--context", config.context, "--glossary-json", json.dumps(config.glossary, ensure_ascii=False)]
+            try:
+                runner.run(args)
+            except CancelledError:
+                raise
+            except (PipelineError, OSError) as exc:
+                progress(f"Warning: stronger subtitle review failed; the original subtitles and flagged report remain available: {exc}")
+                review = json.loads(review_path.read_text(encoding="utf-8"))
+                review["review_error"] = str(exc)
+                _atomic_json_write(review_path, review)
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            publish("review_report", review_path, config.target_language)
+            progress("Subtitle suggestions are ready. Review them in Dub Details, then continue this dub.")
+            raise ReviewRequired("Subtitle review required before voice generation")
+        for idx, value in decisions.items():
+            segments[idx].translated = value
+        if decisions:
+            write_srt(segments, en_srt, translated=True)
+            write_vtt(segments, en_vtt, translated=True)
+            publish("translated_srt", en_srt, config.target_language)
+            publish("translated_vtt", en_vtt, config.target_language)
+            progress(f"Applied {len(decisions)} approved subtitle revisions")
 
     if config.mode == "subtitles":
         progress(f"DONE: {en_srt}")
@@ -2053,6 +2112,8 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         "max_speakers": config.max_speakers,
         "speaker_threshold": config.speaker_threshold,
         "speaker_backend": config.speaker_backend,
+        "review_before_dub": config.review_before_dub,
+        "review_model": config.review_model if config.review_before_dub else None,
         "whisper_model": WHISPER_MODEL,
         "llm_model": LLM_MODEL if config.translation == "llm" else None,
         "demucs_model": DEMUCS_MODEL,

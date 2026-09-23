@@ -222,10 +222,11 @@ class ProjectVersionsTests(unittest.TestCase):
                 config = Config(source=str(video), output_dir=output, mode="subtitles", translation="llm", version_id="sub_test")
                 results = run_pipeline(config, lambda _: None, Runner())
 
-            self.assertEqual([e[0] for e in events], ["source_video", "chinese_srt", "chinese_vtt", "translated_srt", "translated_vtt"])
+            self.assertEqual([e[0] for e in events], ["source_video", "chinese_srt", "chinese_vtt", "translated_srt", "translated_vtt", "review_report"])
             self.assertTrue(all(exists for _, exists, _ in events))
             self.assertIn("WEBVTT", results["translated_vtt"].read_text())
             self.assertIn("Hello", results["translated_srt"].read_text())
+            self.assertEqual(json.loads(results["review_report"].read_text())["total_cues"], 1)
             self.assertEqual(results["translated_srt"].parent.name, "sub_test")
 
     def test_translated_subtitles_survive_character_analysis_failure(self):

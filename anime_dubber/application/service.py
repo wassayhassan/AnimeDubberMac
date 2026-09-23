@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import platform
 import shutil
@@ -16,11 +17,13 @@ from ..core import (
     CancelledError,
     CommandRunner,
     Config,
+    ReviewRequired,
     DEFAULT_CONTEXT,
     DEFAULT_GLOSSARY,
     analyze_only,
     list_macos_voices,
     run_pipeline,
+    _atomic_json_write,
 )
 from .events import AppEvent, progress_to_event
 from .jobs import JobRecord
@@ -141,6 +144,8 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         speaker_threshold=max(0.0, float(threshold)),
         series_id=str(data.get("series_id") or ""),
         speaker_backend=str(speaker.get("backend", data.get("speaker_backend", "auto")) or "auto"),
+        review_before_dub=bool(data.get("review_before_dub", False)),
+        review_model=str(data.get("review_model") or "mlx-community/Qwen3-8B-4bit"),
     )
 
 
@@ -426,6 +431,29 @@ class ApplicationService:
                          name=f"AnimeDubber-{job_id}", daemon=True).start()
         return job_id
 
+    def approve_review(self, output_dir: str, project_id: str, dub_id: str,
+                       revisions: Dict[str, str]) -> dict:
+        """Record an explicit review decision for one paused dub version."""
+        project = self.get_project(output_dir, project_id)
+        dub = next((item for item in project.get("dubs", []) if item.get("id") == dub_id), None)
+        if not dub or dub.get("status") != "paused" or dub.get("error") != "Subtitle review required before voice generation":
+            raise ValueError("This dub is not awaiting subtitle review")
+        path = Path(str(dub.get("artifacts", {}).get("review_report") or "")).resolve()
+        version_dir = (Path(output_dir).expanduser().resolve() / "versions" / dub_id).resolve()
+        if path.parent != version_dir or not path.name.endswith(".review.json"):
+            raise ValueError("Review report is not in this dub version")
+        report = json.loads(path.read_text(encoding="utf-8"))
+        permitted = set(report.get("priority_cues") or [])
+        cleaned = {}
+        for key, value in revisions.items():
+            cue = int(key)
+            if cue not in permitted or not isinstance(value, str) or not value.strip():
+                raise ValueError("Review revision must name a priority cue and contain text")
+            cleaned[str(cue)] = value.strip()
+        approval = path.with_name(path.name.replace(".review.json", ".review-approval.json"))
+        _atomic_json_write(approval, {"signature": report["signature"], "revisions": cleaned})
+        return {"approved": True, "revisions": len(cleaned), "path": str(approval)}
+
     def _execute(self, record: JobRecord, config: Config, analysis: bool) -> None:
         from datetime import datetime, timezone
 
@@ -491,7 +519,7 @@ class ApplicationService:
                 self._emit(AppEvent("artifact", {"kind": kind, "path": path}, record.id))
             self._emit(AppEvent("finished", {"status": "completed", "result": record.result}, record.id))
         except CancelledError as exc:
-            record.status = "paused" if runner.pause_requested else "cancelled"
+            record.status = "paused" if runner.pause_requested or isinstance(exc, ReviewRequired) else "cancelled"
             record.stage = record.status
             record.error = str(exc)
             if store:

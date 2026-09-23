@@ -27,6 +27,7 @@ struct AppPreferences: Codable, Equatable {
 
     var detectCharacters = true
     var resumeCachedWork = true
+    var reviewBeforeDub: Bool? = false
     var speakerBackend = "auto"
     var maxSpeakers = 12
     var speakerThreshold = 0.0
@@ -98,6 +99,7 @@ struct SettingsSnapshot: Equatable {
     let elevenLabsVoiceID: String
     let detectCharacters: Bool
     let resumeCachedWork: Bool
+    let reviewBeforeDub: Bool
     let speakerBackend: String
     let maxSpeakers: Int
     let speakerThreshold: Double

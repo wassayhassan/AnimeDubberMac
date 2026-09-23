@@ -78,6 +78,13 @@ def serve() -> int:
                     str(params.get("dub_id") or ""),
                     api_key=str(params.get("elevenlabs_api_key") or ""),
                 )}
+            elif method == "approve_review":
+                result = service.approve_review(
+                    str(params.get("output_dir") or ""),
+                    str(params.get("project_id") or ""),
+                    str(params.get("dub_id") or ""),
+                    dict(params.get("revisions") or {}),
+                )
             elif method == "get_job":
                 job_id = str(params.get("job_id") or "")
                 if not job_id:
