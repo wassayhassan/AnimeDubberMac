@@ -16,13 +16,13 @@ final class AppState: ObservableObject {
     @Published var outputMode: OutputMode = .dub
 
     @Published var asrProvider: ASRProvider = .auto
-    @Published var mlxWhisperModel = "mlx-community/whisper-large-v3-turbo"
+    @Published var mlxWhisperModel = "mlx-community/whisper-large-v3-mlx"
     @Published var fasterWhisperModel = "large-v3"
     @Published var fasterWhisperDevice = "auto"
     @Published var fasterWhisperComputeType = "auto"
 
     @Published var translationProvider: TranslationProvider = .llm
-    @Published var llmModel = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    @Published var llmModel = "mlx-community/Qwen3-8B-4bit"
     @Published var reviewModel = "mlx-community/Qwen3-8B-4bit"
     @Published var ollamaURL = "http://127.0.0.1:11434"
     @Published var ollamaModel = "qwen3:4b"
@@ -44,7 +44,7 @@ final class AppState: ObservableObject {
 
     @Published var detectCharacters = true
     @Published var resumeCachedWork = true
-    @Published var reviewBeforeDub = false
+    @Published var reviewBeforeDub = true
     @Published var speakerBackend = "auto"
     @Published var maxSpeakers = 12
     @Published var speakerThreshold = 0.0
@@ -223,7 +223,7 @@ final class AppState: ObservableObject {
         elevenLabsVoiceID = preferences.elevenLabsVoiceID
         detectCharacters = preferences.detectCharacters
         resumeCachedWork = preferences.resumeCachedWork
-        reviewBeforeDub = preferences.reviewBeforeDub ?? false
+        reviewBeforeDub = preferences.reviewBeforeDub ?? true
         speakerBackend = preferences.speakerBackend
         maxSpeakers = preferences.maxSpeakers
         speakerThreshold = preferences.speakerThreshold
@@ -484,7 +484,7 @@ final class AppState: ObservableObject {
         backgroundVolume = (config["background_volume"] as? NSNumber)?.doubleValue ?? backgroundVolume
         dubVolume = (config["dub_volume"] as? NSNumber)?.doubleValue ?? dubVolume
         backgroundDucking = config["ducking"] as? Bool ?? backgroundDucking
-        reviewBeforeDub = config["review_before_dub"] as? Bool ?? false
+        reviewBeforeDub = config["review_before_dub"] as? Bool ?? true
         selection = .newDub
     }
 

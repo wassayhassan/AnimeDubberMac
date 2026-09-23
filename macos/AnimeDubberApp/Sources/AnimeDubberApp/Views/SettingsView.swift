@@ -154,7 +154,7 @@ struct SettingsView: View {
                     TextField("MLX model ID", text: $state.llmModel)
                         .textFieldStyle(.roundedBorder)
                 }
-                Toggle("Review flagged lines before dubbing", isOn: $state.reviewBeforeDub)
+                Toggle("Automatically check and correct subtitles", isOn: $state.reviewBeforeDub)
                 if state.reviewBeforeDub {
                     Picker("Review model", selection: $state.reviewModel) {
                         Text("Qwen3 8B").tag("mlx-community/Qwen3-8B-4bit")

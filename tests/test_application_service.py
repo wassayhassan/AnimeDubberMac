@@ -8,11 +8,23 @@ from unittest.mock import patch
 
 from anime_dubber.application.events import progress_to_event
 from anime_dubber.application.service import ApplicationService, config_from_dict
+from anime_dubber.cli import build_parser
 from anime_dubber.application.project import ProjectStore
 from anime_dubber.core import ReviewRequired
 
 
 class ApplicationServiceTests(unittest.TestCase):
+    def test_new_jobs_default_to_automatic_review_and_stronger_local_models(self):
+        cfg = config_from_dict({"source": "example.mp4", "output_dir": "/tmp/anime-review"})
+        self.assertTrue(cfg.review_before_dub)
+        self.assertEqual(cfg.mlx_whisper_model, "mlx-community/whisper-large-v3-mlx")
+        self.assertEqual(cfg.llm_model, "mlx-community/Qwen3-8B-4bit")
+        default_args = build_parser().parse_args(["run", "example.mp4"])
+        self.assertTrue(default_args.review_before_dub)
+        self.assertEqual(default_args.llm_model, cfg.llm_model)
+        self.assertEqual(default_args.mlx_whisper_model, cfg.mlx_whisper_model)
+        self.assertFalse(build_parser().parse_args(["run", "example.mp4", "--no-auto-review"]).review_before_dub)
+
     def test_review_checkpoint_is_paused_and_approval_is_scoped_to_its_dub(self):
         with tempfile.TemporaryDirectory() as temp:
             service = ApplicationService()

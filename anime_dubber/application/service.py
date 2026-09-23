@@ -100,12 +100,12 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         mode=str(data.get("mode") or "dub"),
         target_language=target_language,
         asr_provider=asr_provider,
-        mlx_whisper_model=str(asr.get("mlx_model", data.get("mlx_whisper_model", "mlx-community/whisper-large-v3-turbo")) or "mlx-community/whisper-large-v3-turbo"),
+        mlx_whisper_model=str(asr.get("mlx_model", data.get("mlx_whisper_model", "mlx-community/whisper-large-v3-mlx")) or "mlx-community/whisper-large-v3-mlx"),
         faster_whisper_model=str(asr.get("model", data.get("faster_whisper_model", "large-v3")) or "large-v3"),
         faster_whisper_device=str(asr.get("device", data.get("faster_whisper_device", "auto")) or "auto"),
         faster_whisper_compute_type=str(asr.get("compute_type", data.get("faster_whisper_compute_type", "auto")) or "auto"),
         translation=translation_provider,
-        llm_model=str(translation.get("llm_model", data.get("llm_model", "mlx-community/Qwen3-4B-Instruct-2507-4bit")) or "mlx-community/Qwen3-4B-Instruct-2507-4bit"),
+        llm_model=str(translation.get("llm_model", data.get("llm_model", "mlx-community/Qwen3-8B-4bit")) or "mlx-community/Qwen3-8B-4bit"),
         ollama_url=str(translation.get("ollama_url", data.get("ollama_url", "http://127.0.0.1:11434")) or "http://127.0.0.1:11434"),
         ollama_model=str(translation.get("model", data.get("ollama_model", "qwen3:4b")) or "qwen3:4b"),
         tts_engine=tts_provider,
@@ -146,7 +146,7 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         speaker_threshold=max(0.0, float(threshold)),
         series_id=str(data.get("series_id") or ""),
         speaker_backend=str(speaker.get("backend", data.get("speaker_backend", "auto")) or "auto"),
-        review_before_dub=bool(data.get("review_before_dub", False)),
+        review_before_dub=bool(data.get("review_before_dub", True)),
         review_model=str(data.get("review_model") or "mlx-community/Qwen3-8B-4bit"),
     )
 

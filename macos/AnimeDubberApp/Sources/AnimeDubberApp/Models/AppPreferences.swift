@@ -5,12 +5,12 @@ struct AppPreferences: Codable, Equatable {
     var seriesID = "10000-years-cultivation"
     var outputMode = OutputMode.dub.rawValue
     var asrProvider = ASRProvider.auto.rawValue
-    var mlxWhisperModel: String? = "mlx-community/whisper-large-v3-turbo"
+    var mlxWhisperModel: String? = "mlx-community/whisper-large-v3-mlx"
     var fasterWhisperModel = "large-v3"
     var fasterWhisperDevice = "auto"
     var fasterWhisperComputeType = "auto"
     var translationProvider = TranslationProvider.llm.rawValue
-    var llmModel: String? = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    var llmModel: String? = "mlx-community/Qwen3-8B-4bit"
     var reviewModel: String? = "mlx-community/Qwen3-8B-4bit"
     var ollamaURL = "http://127.0.0.1:11434"
     var ollamaModel = "qwen3:4b"
@@ -30,7 +30,7 @@ struct AppPreferences: Codable, Equatable {
 
     var detectCharacters = true
     var resumeCachedWork = true
-    var reviewBeforeDub: Bool? = false
+    var reviewBeforeDub: Bool? = true
     var speakerBackend = "auto"
     var maxSpeakers = 12
     var speakerThreshold = 0.0
@@ -39,12 +39,25 @@ struct AppPreferences: Codable, Equatable {
     var dubVolume = 1.15
     var backgroundDucking = false
 
-    static let defaultsKey = "AnimeDubberPreferences.v2"
+    static let defaultsKey = "AnimeDubberPreferences.v3"
 
     static func load() -> AppPreferences {
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let decoded = try? JSONDecoder().decode(AppPreferences.self, from: data) {
             return decoded
+        }
+
+        if let oldData = UserDefaults.standard.data(forKey: "AnimeDubberPreferences.v2"),
+           var migrated = try? JSONDecoder().decode(AppPreferences.self, from: oldData) {
+            if migrated.mlxWhisperModel == "mlx-community/whisper-large-v3-turbo" {
+                migrated.mlxWhisperModel = "mlx-community/whisper-large-v3-mlx"
+            }
+            if migrated.llmModel == "mlx-community/Qwen3-4B-Instruct-2507-4bit" {
+                migrated.llmModel = "mlx-community/Qwen3-8B-4bit"
+            }
+            migrated.reviewBeforeDub = true
+            migrated.save()
+            return migrated
         }
 
         // Migrate the older v1 preferences without failing when new voice fields
