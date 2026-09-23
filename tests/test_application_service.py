@@ -93,6 +93,16 @@ class ApplicationServiceTests(unittest.TestCase):
         self.assertEqual(event.data["total"], 100)
         self.assertAlmostEqual(event.data["fraction"], 0.25)
 
+    def test_post_voice_steps_report_their_own_progress(self):
+        for title in ("Checking voice clips", "Rendering dub timeline", "Preparing music and effects"):
+            with self.subTest(title=title):
+                event = progress_to_event(f"{title}: 3/12", "job_x")
+                self.assertEqual(event.data["stage"], "mixing")
+                self.assertAlmostEqual(event.data["fraction"], 0.25)
+        event = progress_to_event("Combining dub timeline chunks…", "job_x")
+        self.assertEqual(event.data["stage"], "mixing")
+        self.assertNotIn("fraction", event.data)
+
     def test_sync_job_wraps_legacy_pipeline(self):
         events = []
         service = ApplicationService(event_sink=events.append)

@@ -23,9 +23,12 @@ struct StatusBarView: View {
                 if let progress = state.progressFraction {
                     ProgressView(value: progress)
                         .frame(width: 120)
-                    Text(progress, format: .percent.precision(.fractionLength(0)))
+                    Text("Step \(progress, format: .percent.precision(.fractionLength(0)))")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                } else if state.activeJobID != nil {
+                    ProgressView()
+                        .controlSize(.small)
                 }
 
                 Spacer()

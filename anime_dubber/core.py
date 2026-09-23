@@ -1524,7 +1524,13 @@ def render_dub_timeline(
     if config.resume and _complete_wav(timeline, minimum_seconds=total_duration * .98) and not config.force:
         return timeline
 
-    durations = [ffprobe_duration(p, runner) for p in clips]
+    progress(f"Checking voice clips: 0/{len(clips)}")
+    durations = []
+    for idx, clip in enumerate(clips, start=1):
+        runner.check_cancel()
+        durations.append(ffprobe_duration(clip, runner))
+        if idx % 50 == 0 or idx == len(clips):
+            progress(f"Checking voice clips: {idx}/{len(clips)}")
     clip_infos = list(zip(segments, clips, durations))
     chunk_dir = work_dir / f"timeline_chunks_{timeline_signature}"
     if chunk_dir.exists() and config.force:
@@ -1534,6 +1540,7 @@ def render_dub_timeline(
     chunk_seconds = max(30, int(config.chunk_seconds))
     chunks: List[Path] = []
     count = max(1, int(math.ceil(total_duration / chunk_seconds)))
+    progress(f"Rendering dub timeline: 0/{count}")
     for n in range(count):
         runner.check_cancel()
         start = n * chunk_seconds
@@ -1579,6 +1586,7 @@ def render_dub_timeline(
         _atomic_media_run(runner, cmd, out)
         progress(f"Rendering dub timeline: {n + 1}/{count}")
 
+    progress("Combining dub timeline chunks…")
     concat = work_dir / f"timeline_concat_{timeline_signature}.txt"
     concat_lines = [f"file {_ffconcat_quote(chunk_path)}\n" for chunk_path in chunks]
     concat.write_text("".join(concat_lines), encoding="utf-8")
@@ -1674,6 +1682,7 @@ def build_dialogue_safe_background(
     chunks: List[Path] = []
     count = max(1, int(math.ceil(total_duration / chunk_seconds)))
 
+    progress(f"Preparing music and effects: 0/{count}")
     for n in range(count):
         runner.check_cancel()
         start = n * chunk_seconds
@@ -1682,6 +1691,7 @@ def build_dialogue_safe_background(
         chunk = chunk_dir / f"chunk_{n:05d}.wav"
         chunks.append(chunk)
         if config.resume and _complete_wav(chunk, minimum_seconds=dur * .98) and not config.force:
+            progress(f"Preparing music and effects: {n + 1}/{count} (cached)")
             continue
 
         local: List[Tuple[float, float]] = []
@@ -1698,6 +1708,7 @@ def build_dialogue_safe_background(
                 "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(original),
                 "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(chunk),
             ], chunk)
+            progress(f"Preparing music and effects: {n + 1}/{count}")
             continue
 
         # Chunk-local expressions keep ffmpeg command size manageable even for
@@ -1719,7 +1730,9 @@ def build_dialogue_safe_background(
             "-filter_complex", filt, "-map", "[bed]",
             "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(chunk),
         ], chunk)
+        progress(f"Preparing music and effects: {n + 1}/{count}")
 
+    progress("Combining music and effects chunks…")
     concat = work_dir / f"background_concat_{signature}.txt"
     concat.write_text("".join(f"file {_ffconcat_quote(x)}\n" for x in chunks), encoding="utf-8")
     _atomic_media_run(runner, [

@@ -792,9 +792,7 @@ final class AppState: ObservableObject {
         case "stage":
             let title = data["title"] as? String ?? "Working"
             statusText = title
-            if let fraction = data["fraction"] as? Double {
-                progressFraction = fraction
-            }
+            progressFraction = data["fraction"] as? Double
 
         case "progress":
             statusText = data["title"] as? String ?? "Working"
