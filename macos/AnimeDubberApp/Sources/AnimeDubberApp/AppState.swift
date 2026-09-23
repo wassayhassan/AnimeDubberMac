@@ -561,10 +561,10 @@ final class AppState: ObservableObject {
         let inheritedProvider = characterDraft.ttsProvider == "inherit"
             ? voiceProvider.rawValue
             : characterDraft.ttsProvider
-        let reference = characterDraft.referenceAudio.isEmpty
-            ? (chatterboxReferenceAudio.isEmpty && characterDraft.autoReferenceEnabled && autoSourceVoices
-               ? characterDraft.suggestedReferenceAudio : chatterboxReferenceAudio)
-            : characterDraft.referenceAudio
+        let reference = !characterDraft.referenceAudio.isEmpty
+            ? characterDraft.referenceAudio
+            : (characterDraft.autoReferenceEnabled && autoSourceVoices
+               ? characterDraft.suggestedReferenceAudio : "")
         let selectedKokoro = characterDraft.kokoroVoice.isEmpty
             ? kokoroVoice
             : characterDraft.kokoroVoice
@@ -574,6 +574,7 @@ final class AppState: ObservableObject {
                 method: "preview_voice",
                 params: [
                     "provider": inheritedProvider,
+                    "character_id": selectedCharacterID ?? "",
                     "voice": characterDraft.macosVoice,
                     "text": text,
                     "rate": characterDraft.ttsRate,

@@ -86,6 +86,32 @@ class FfmpegPipelineTests(unittest.TestCase):
             self.assertGreaterEqual(ffprobe_duration(timeline, runner), 30.99)
             self.assertGreaterEqual(ffprobe_duration(mixed, runner), 30.99)
 
+    def test_character_cloning_uses_own_reference_and_falls_back_to_character_voice(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            raw = d / "speech.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=0.4",
+                "-ac", "1", "-ar", "44100", str(raw),
+            ], check=True)
+            cfg = Config(source="x", output_dir=d, tts_engine="chatterbox", multi_character=True,
+                         chatterbox_reference_audio="/global-female.wav")
+            seg = Segment(0, 1, "你好", "Hello", speaker_id="CHAR_001")
+            with patch("anime_dubber.providers.tts.synthesize_chatterbox",
+                       side_effect=lambda _text, path, **_kw: shutil.copyfile(raw, path)) as clone:
+                prepare_tts_clip(seg, 0, d / "tts", cfg, CommandRunner(), lambda _m: None,
+                                 profile={"id": "CHAR_001", "suggested_reference_audio": "/character.wav"})
+            self.assertEqual(clone.call_args.kwargs["reference_audio"], "/character.wav")
+
+            seg.speaker_id = "CHAR_002"
+            with patch("anime_dubber.providers.tts.kokoro_available", return_value=True), \
+                 patch("anime_dubber.providers.tts.synthesize_kokoro",
+                       side_effect=lambda _text, path, **_kw: shutil.copyfile(raw, path)) as preset:
+                prepare_tts_clip(seg, 1, d / "tts", cfg, CommandRunner(), lambda _m: None,
+                                 profile={"id": "CHAR_002", "voice_class": "female", "age_group": "child"})
+            self.assertEqual(preset.call_args.kwargs["voice"], "af_heart")
+
 
     def test_dialogue_safe_background_keeps_duration(self):
         with tempfile.TemporaryDirectory() as td:
@@ -183,11 +209,39 @@ class FfmpegPipelineTests(unittest.TestCase):
             cfg = Config(source="x", output_dir=d, tts_engine="macos", force=True)
             seg = Segment(5.0, 5.40, "你好", "Hello")
             runner = CommandRunner()
-            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say):
-                clip = prepare_tts_clip(seg, 0, d / "tts", cfg, runner, lambda _m: None)
+            warnings = []
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say), \
+                 patch.object(runner, "run", wraps=runner.run) as commands:
+                clip = prepare_tts_clip(seg, 0, d / "tts", cfg, runner, warnings.append)
 
             duration = ffprobe_duration(clip, runner)
             self.assertLessEqual(duration, 0.43)
+            self.assertTrue(any("truncating speech" in message for message in warnings))
+            filters = [args[0][args[0].index("-af") + 1] for args, _ in
+                       ((call.args, call.kwargs) for call in commands.call_args_list)
+                       if "-af" in args[0]]
+            self.assertFalse(any("atempo=2." in item or "atempo=3." in item for item in filters))
+
+    def test_trailing_tts_silence_does_not_force_fast_speech(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            padded = d / "padded.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=0.4",
+                "-af", "apad=pad_dur=2", "-ar", "44100", str(padded),
+            ], check=True)
+
+            def fake_say(_text, path, _config, _runner, voice="", rate=205):
+                shutil.copyfile(padded, path)
+
+            cfg = Config(source="x", output_dir=d, tts_engine="macos")
+            warnings = []
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say):
+                clip = prepare_tts_clip(Segment(0, 0.5, "你好", "Hello"), 0, d / "tts",
+                                        cfg, CommandRunner(), warnings.append)
+            self.assertTrue(clip.exists())
+            self.assertFalse(any("speech compression" in message for message in warnings))
 
     def test_pitch_and_style_filter_chain_is_valid(self):
         with tempfile.TemporaryDirectory() as td:

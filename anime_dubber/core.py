@@ -1245,11 +1245,29 @@ def _pitch_filters(semitones: float) -> List[str]:
 
 
 def _chatterbox_reference(profile: dict, config: Config) -> str:
-    return str(
-        profile.get("reference_audio", "") or config.chatterbox_reference_audio or
-        (profile.get("suggested_reference_audio", "") if config.auto_voice_references
-         and profile.get("auto_reference_enabled", True) else "")
-    ).strip()
+    manual = str(profile.get("reference_audio") or "").strip()
+    if manual:
+        return manual
+    if config.auto_voice_references and profile.get("auto_reference_enabled", True):
+        suggested = str(profile.get("suggested_reference_audio") or "").strip()
+        if suggested:
+            return suggested
+    # A project-wide prompt must never override individual characters or
+    # quietly turn every character without a clean source clip into its voice.
+    return str(config.chatterbox_reference_audio or "").strip() if not profile else ""
+
+
+def _character_voice_fallback() -> str:
+    """Choose a character-specific preset when there is no cloneable prompt."""
+    from .providers.tts import kokoro_available
+    if kokoro_available():
+        return "kokoro"
+    if platform.system() == "Darwin" and shutil.which("say"):
+        return "macos"
+    raise PipelineError(
+        "No clean source voice clip was found for a character. Select a reference "
+        "in Characters, or install Kokoro to use a voice chosen for that character."
+    )
 
 
 def prepare_tts_clip(
@@ -1316,11 +1334,16 @@ def prepare_tts_clip(
             else:
                 resolved_tts = "elevenlabs"
 
+    if resolved_tts == "chatterbox" and config.multi_character and profile and not chatterbox_reference:
+        resolved_tts = _character_voice_fallback()
+        progress(f"No source voice reference for {seg.speaker_id}; using {resolved_tts} character voice")
+
     if resolved_tts == "kokoro" and (not kokoro_voice or kokoro_voice == "auto"):
         from .providers.tts import automatic_kokoro_voice
         kokoro_voice = automatic_kokoro_voice(profile)
 
     signature_data = {
+        "processing_version": 2,
         "text": text,
         "engine": resolved_tts,
         "configured_engine": config.tts_engine,
@@ -1364,9 +1387,21 @@ def prepare_tts_clip(
 
     suffix = ".aiff" if resolved_tts == "macos" else (".mp3" if resolved_tts == "elevenlabs" else ".wav")
     source_audio = tts_dir / f"{index:06d}_{clip_signature}{suffix}"
+    raw_audio = source_audio
     rendering = tts_dir / f"{index:06d}_{clip_signature}_rendering.wav"
+    speech_audio = tts_dir / f"{index:06d}_{clip_signature}_speech.wav"
 
-    if resolved_tts == "chatterbox":
+    if config.resume and source_audio.is_file() and source_audio.stat().st_size > 1000 and not config.force:
+        try:
+            valid_source = ffprobe_duration(source_audio, runner) > 0.05
+        except PipelineError:
+            valid_source = False
+    else:
+        valid_source = False
+
+    if valid_source:
+        progress(f"Reusing generated voice for line {index + 1}")
+    elif resolved_tts == "chatterbox":
         from .providers.tts import synthesize_chatterbox
         try:
             synthesize_chatterbox(
@@ -1418,7 +1453,25 @@ def prepare_tts_clip(
     else:
         raise PipelineError(f"Unsupported TTS engine: {resolved_tts}")
 
-    source_dur = max(0.05, ffprobe_duration(source_audio, runner))
+    # TTS can leave a long silent tail. Timing against the whole file can
+    # make even a short utterance appear to need several times playback speed.
+    runner.run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source_audio),
+        "-af", "silenceremove=start_periods=1:start_silence=0.005:start_threshold=-55dB,"
+               "areverse,silenceremove=start_periods=1:start_silence=0.08:"
+               "start_threshold=-55dB,areverse",
+        "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(speech_audio),
+    ])
+    try:
+        source_dur = ffprobe_duration(speech_audio, runner)
+    except PipelineError:
+        source_dur = 0.0
+    if source_dur <= 0.005:
+        progress(f"Warning: silence trimming removed line {index + 1}; using original voice audio")
+        speech_audio.unlink(missing_ok=True)
+        source_dur = max(0.05, ffprobe_duration(source_audio, runner))
+    else:
+        source_audio = speech_audio
     target_dur = max(0.18, seg.end - seg.start)
     filters: List[str] = [
         # macOS say and some hosted TTS voices can include a short lead-in.
@@ -1430,9 +1483,10 @@ def prepare_tts_clip(
     filters.extend(_pitch_filters(pitch))
     if source_dur > target_dur * 1.02:
         factor = source_dur / target_dur
-        if factor > 2.5:
-            progress(f"Warning: line {index + 1} needs {factor:.1f}× speech compression to fit timing")
-        filters.append(atempo_chain(factor))
+        if factor > 1.5:
+            progress(f"Warning: line {index + 1} needs {factor:.1f}× speech compression; "
+                     "capping at 1.5× and truncating speech beyond the cue. Shorten this subtitle for a complete line.")
+        filters.append(atempo_chain(min(factor, 1.5)))
     if style == "shouting":
         filters += ["acompressor=threshold=0.125:ratio=3:attack=5:release=90"]
     elif style == "whispering":
@@ -1481,11 +1535,9 @@ def prepare_tts_clip(
         rendering.replace(wav)
     finally:
         rendering.unlink(missing_ok=True)
+        speech_audio.unlink(missing_ok=True)
 
-    try:
-        source_audio.unlink()
-    except FileNotFoundError:
-        pass
+    raw_audio.unlink(missing_ok=True)
     return wav
 
 def _clips_overlapping(

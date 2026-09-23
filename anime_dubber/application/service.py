@@ -656,6 +656,13 @@ class ApplicationService:
             else:
                 provider = "piper"
 
+        # Preview uses the same no-reference fallback as dub generation.
+        # Otherwise Chatterbox's single unconditioned default sounds identical
+        # for every character regardless of its displayed age/voice class.
+        if provider == "chatterbox" and settings.get("character_id") and not str(settings.get("reference_audio") or "").strip():
+            from ..core import _character_voice_fallback
+            provider = _character_voice_fallback()
+
         if provider == "macos":
             if platform.system() != "Darwin" or not shutil.which("say"):
                 raise RuntimeError("macOS voice preview requires the 'say' command.")
