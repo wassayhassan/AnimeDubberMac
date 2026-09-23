@@ -57,11 +57,23 @@ struct ProjectWorkspaceView: View {
                 Button("View Subtitles") { state.selection = .subtitles }
                 Button("View Dubs") { state.selection = .dubs }
                 Spacer()
-                Button("New Dub", systemImage: "waveform.badge.plus") { state.selection = .newDub }
+                Button("New Dub", systemImage: "waveform.badge.plus") {
+                    state.outputMode = .dub
+                    state.selection = .newDub
+                }
                     .buttonStyle(.borderedProminent)
+            }
+            if project.status == "failed", let error = project.lastError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
             }
             subtitles(project)
             dubs(project)
+            DisclosureGroup("Project files and settings") {
+                media(project)
+                Button("Project Settings") { state.selection = .projectSettings }
+                Button("Character Voices") { state.selection = .characters }
+            }
         }
     }
 
@@ -105,8 +117,7 @@ struct ProjectWorkspaceView: View {
                 HStack {
                     Spacer()
                     Button("Generate Subtitles", systemImage: "text.badge.plus") {
-                        state.outputMode = .subtitles
-                        state.selection = .newDub
+                        state.selection = .newSubtitles
                     }
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
@@ -155,6 +166,7 @@ struct ProjectWorkspaceView: View {
 struct ArtifactLink: View {
     let title: String
     let path: String
+    @State private var showsPath = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -162,16 +174,17 @@ struct ArtifactLink: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).fontWeight(.medium)
-                Text(path).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    .lineLimit(2).textSelection(.enabled)
+                if showsPath {
+                    Text(path).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(2).textSelection(.enabled)
+                }
             }
             Spacer()
-            Button { NSWorkspace.shared.open(URL(fileURLWithPath: path)) } label: {
-                Image(systemName: "arrow.up.right.square")
-            }.help("Open")
-            Button { exportFile(path) } label: {
-                Image(systemName: "square.and.arrow.up")
-            }.help("Export a copy…")
+            Button("Open") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            Button("Save…") { exportFile(path) }
+            Button { showsPath.toggle() } label: {
+                Image(systemName: "info.circle")
+            }.help("Show file location")
         }
     }
 }

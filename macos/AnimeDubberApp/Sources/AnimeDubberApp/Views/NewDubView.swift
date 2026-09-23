@@ -3,13 +3,20 @@ import SwiftUI
 struct NewDubView: View {
     @EnvironmentObject private var state: AppState
     @State private var advancedExpanded = false
+    @State private var pipelineExpanded = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 identitySection
-                pipelineSection
+                if state.outputMode == .dub {
+                    Text("Automatic transcription, translation, character voices, subtitle correction, and timing are enabled. You can change how they work below.")
+                        .foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Advanced processing settings", isExpanded: $pipelineExpanded) {
+                    pipelineSection
+                }
                 actions
             }
             .frame(maxWidth: 860, alignment: .leading)
@@ -164,7 +171,7 @@ struct NewDubView: View {
                     settingRow("Source voices") {
                         Toggle("Choose character voice clips automatically", isOn: $state.autoSourceVoices)
                     }
-                    Text("Analyze Characters first to check each source clip. A character without a usable clip gets a Kokoro or macOS voice; source identity and child-like tone cannot be guaranteed without a clean reference.")
+                    Text("Character voice clips are chosen automatically during dubbing. You can inspect or change them later. A character without a usable clip gets a fallback voice.")
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -269,10 +276,12 @@ struct NewDubView: View {
         HStack {
             Spacer()
 
-            Button("Analyze Characters") {
-                state.startJob(analysis: true)
+            if pipelineExpanded {
+                Button("Analyze Characters Only") {
+                    state.startJob(analysis: true)
+                }
+                .disabled(!state.canStartJob)
             }
-            .disabled(!state.canStartJob)
 
             Button(state.outputMode == .subtitles ? "Generate Subtitles" : "Generate Dub") {
                 state.startJob(analysis: false)

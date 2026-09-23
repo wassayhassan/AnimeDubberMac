@@ -2,7 +2,7 @@ import Foundation
 
 struct AppPreferences: Codable, Equatable {
     var outputFolder = "~/Movies/AnimeDubber"
-    var seriesID = "10000-years-cultivation"
+    var seriesID = ""
     var outputMode = OutputMode.dub.rawValue
     var asrProvider = ASRProvider.auto.rawValue
     var mlxWhisperModel: String? = "mlx-community/whisper-large-v3-mlx"
@@ -34,7 +34,7 @@ struct AppPreferences: Codable, Equatable {
     var speakerBackend = "auto"
     var maxSpeakers = 12
     var speakerThreshold = 0.0
-    var seriesContext = "Chinese xianxia/xuanhuan cultivation animation. Keep names, sects, realms, system terms, and cultivation terminology consistent."
+    var seriesContext = ""
     var backgroundVolume = 1.0
     var dubVolume = 1.15
     var backgroundDucking = false

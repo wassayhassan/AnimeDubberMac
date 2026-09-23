@@ -9,14 +9,16 @@ enum SidebarDestination: Hashable {
     case dub(String)
     case projectSettings
     case newDub
+    case newSubtitles
     case projects
+    case processing
     case characters
     case activity
     case settings
 
     var title: String {
         switch self {
-        case .newProject: "New Project"
+        case .newProject: "Dub a Video"
         case .overview: "Overview"
         case .media: "Source / Media"
         case .subtitles: "Subtitles"
@@ -24,7 +26,9 @@ enum SidebarDestination: Hashable {
         case .dub: "Dub Details"
         case .projectSettings: "Project Settings"
         case .newDub: "New Dub"
+        case .newSubtitles: "Generate Subtitles"
         case .projects: "Projects"
+        case .processing: "Processing"
         case .characters: "Characters"
         case .activity: "Activity"
         case .settings: "Settings"
@@ -41,7 +45,9 @@ enum SidebarDestination: Hashable {
         case .dub: "waveform.circle"
         case .projectSettings: "slider.horizontal.3"
         case .newDub: "waveform.badge.plus"
+        case .newSubtitles: "text.badge.plus"
         case .projects: "square.stack.3d.up"
+        case .processing: "waveform.path"
         case .characters: "person.2"
         case .activity: "list.bullet.rectangle"
         case .settings: "gearshape"
@@ -177,6 +183,7 @@ struct SystemCheckItem: Identifiable {
     let name: String
     let ok: Bool
     let detail: String
+    var optional = false
 }
 
 
@@ -252,6 +259,7 @@ struct SubtitleSummary: Identifiable {
 
 struct DubSummary: Identifiable {
     let id: String
+    let jobID: String
     let name: String
     let language: String
     let sourceLanguage: String
@@ -269,6 +277,7 @@ struct DubSummary: Identifiable {
     init?(dictionary: [String: Any]) {
         guard let id = dictionary["id"] as? String else { return nil }
         self.id = id
+        jobID = dictionary["job_id"] as? String ?? ""
         name = dictionary["name"] as? String ?? id
         language = dictionary["language"] as? String ?? "en"
         sourceLanguage = dictionary["source_language"] as? String ?? "zh"

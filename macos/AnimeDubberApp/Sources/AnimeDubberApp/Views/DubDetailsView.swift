@@ -1,3 +1,4 @@
+import AppKit
 import AVKit
 import SwiftUI
 
@@ -8,6 +9,9 @@ struct DubDetailsView: View {
     @State private var sourceCuePlayer: AVPlayer?
     @State private var confirmDelete = false
     @State private var advancedExpanded = false
+    @State private var configExpanded = false
+    @State private var reviewExpanded = false
+    @State private var filesExpanded = false
     @State private var voiceAssignments: [String] = []
     @State private var reviewCues: [ReviewCue] = []
     @State private var reviewDraft: [Int: String] = [:]
@@ -44,15 +48,53 @@ struct DubDetailsView: View {
                         }.font(.callout).foregroundStyle(.secondary)
                     }
 
+                    if dub.status == "failed" || (dub.status == "paused" && dub.error != "Subtitle review required before voice generation") {
+                        GroupBox("Needs attention") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(friendlyError(dub.error ?? "Processing stopped."))
+                                HStack {
+                                    Button("Retry This Dub", systemImage: "arrow.clockwise") { state.resumeDub(dub) }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(state.activeJobID != nil)
+                                    if (dub.error ?? "").contains("403") {
+                                        Button("Choose a Video File") { state.newProject() }
+                                    }
+                                    Button("System Check") { state.runSystemCheck() }
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+
                     if let player {
                         NativeDubPlayer(player: player)
                             .frame(height: 340)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
+                        if let path = dub.artifacts["dubbed_video"] {
+                            HStack {
+                                Button("Save Video…", systemImage: "square.and.arrow.down") { exportFile(path) }
+                                    .buttonStyle(.borderedProminent)
+                                Button("Show in Finder", systemImage: "folder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                                }
+                            }
+                        }
                     } else if dub.status == "completed" {
                         Text("The rendered video is unavailable at its recorded path.")
                             .foregroundStyle(.secondary)
                     }
 
+                    if dub.status == "completed" {
+                        GroupBox("Result") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Ready to watch · \(dub.language.uppercased())")
+                                    .font(.headline)
+                                Text(dub.warnings.isEmpty ? "Processing finished. Watch the video to check the result." :
+                                    "Processing finished with \(dub.warnings.count) note(s), including \(dub.warnings.filter { $0.localizedCaseInsensitiveContains("overlap") || $0.localizedCaseInsensitiveContains("timing") }.count) about timing. Review them below if the video needs adjustment.")
+                                    .foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    DisclosureGroup("Processing and voice details", isExpanded: $advancedExpanded) {
                     GroupBox("Overview") {
                         detailGrid([
                             ("Target language", dub.language.uppercased()),
@@ -83,6 +125,7 @@ struct DubDetailsView: View {
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    }
                     if dub.status == "paused" && dub.error == "Subtitle review required before voice generation" {
                         GroupBox("Continue Paused Dub") {
                             VStack(alignment: .leading, spacing: 14) {
@@ -94,8 +137,7 @@ struct DubDetailsView: View {
                                 .buttonStyle(.borderedProminent)
                                 .disabled(state.activeJobID != nil)
                                 if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
-                                Text("Optional: inspect or edit a flagged line below.")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                DisclosureGroup("Inspect subtitles (advanced)", isExpanded: $reviewExpanded) {
                                 ForEach(reviewCues) { cue in
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("Cue \(cue.id) · \(cue.reasons.joined(separator: ", ").replacingOccurrences(of: "_", with: " "))")
@@ -181,24 +223,32 @@ struct DubDetailsView: View {
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(state.activeJobID != nil || reviewCues.isEmpty)
+                                }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    GroupBox("Files") {
+                    GroupBox("Additional files") {
                         VStack(alignment: .leading, spacing: 12) {
                             if dub.artifacts.isEmpty {
                                 Text("Files appear here as each processing stage finishes.")
                                     .foregroundStyle(.secondary)
                             }
-                            ForEach(dub.artifacts.keys.sorted(), id: \.self) { kind in
+                            ForEach(["english_srt", "target_srt", "chinese_srt", "english_vtt"], id: \.self) { kind in
+                                if let path = dub.artifacts[kind] {
+                                    ArtifactLink(title: kind.contains("chinese") ? "Original subtitles" : "Translated subtitles", path: path)
+                                }
+                            }
+                            DisclosureGroup("Technical files", isExpanded: $filesExpanded) {
+                            ForEach(dub.artifacts.keys.sorted().filter { !["dubbed_video", "english_srt", "target_srt", "chinese_srt", "english_vtt"].contains($0) }, id: \.self) { kind in
                                 if let path = dub.artifacts[kind] {
                                     ArtifactLink(title: kind.replacingOccurrences(of: "_", with: " ").capitalized, path: path)
                                 }
                             }
+                            }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     GroupBox {
-                        DisclosureGroup("Full generation settings", isExpanded: $advancedExpanded) {
+                        DisclosureGroup("Full generation settings", isExpanded: $configExpanded) {
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(dub.config.keys.sorted(), id: \.self) { key in
                                     if !["source", "output_dir", "elevenlabs_api_key"].contains(key) {
@@ -223,7 +273,7 @@ struct DubDetailsView: View {
                         }
                     }
                     HStack {
-                        if (["paused", "failed", "cancelled"].contains(dub.status) &&
+                        if (dub.status == "cancelled" &&
                             dub.error != "Subtitle review required before voice generation") ||
                             (dub.status == "running" && state.activeJobID == nil) {
                             Button("Resume This Dub", systemImage: "play.fill") {
@@ -268,6 +318,13 @@ struct DubDetailsView: View {
             }
         }
         .navigationTitle(dub?.title ?? "Dub Details")
+    }
+
+    private func friendlyError(_ error: String) -> String {
+        if error.contains("403") { return "The video site refused the download. Retry using the video's normal page link, or choose a local video file." }
+        if error.contains("ffprobe") || error.contains("ffmpeg") { return "Video tools are missing. Open System Check for setup details, then retry this dub." }
+        if error.localizedCaseInsensitiveContains("audio prompt") { return "The selected voice clip is too short. Check the character voice or use an automatic fallback, then retry." }
+        return error
     }
 
     private func loadPlayer(_ dub: DubSummary) {

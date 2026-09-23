@@ -61,6 +61,12 @@ Setup installs the Python dependencies, runs the tests and backend checks, then 
 
 Open it normally from Finder or Spotlight.
 
+### Dub a video
+
+Open **Dub a Video**, paste the video's normal page URL or choose/drop a local file, select the language, and click **Dub Video**. The app checks the required tools, creates a project, generates subtitles and voices, and opens the finished video. The progress screen shows the current stage; its percentage describes that stage rather than the entire job. Use **Save Video…** on the result page to export the finished movie.
+
+English uses the automatic local voice path by default. Other dubbing languages currently require selecting ElevenLabs under Settings → Providers and adding an API key. A model or tool missing from the Mac is reported before the job starts; use **System Check** for details. Voice, subtitle, and timing changes can be inspected later in the project's dub details.
+
 To rebuild only the native app:
 
 ```bash
