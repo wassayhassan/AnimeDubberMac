@@ -303,7 +303,7 @@ class ReviewTests(unittest.TestCase):
 
             def generate(*_args, **kwargs):
                 prompts.append(kwargs["prompt"])
-                return "unparseable model output" if len(prompts) == 1 else "You"
+                return "unparseable model output" if len(prompts) == 2 else "You"
 
             with patch.dict(sys.modules, {
                 "mlx_whisper": type("FakeASR", (), {
@@ -314,11 +314,14 @@ class ReviewTests(unittest.TestCase):
             }), patch("anime_dubber.review.subprocess.run"):
                 result = review_subtitles(a, b, report, audio=audio, model="test")
             self.assertEqual(result["flags"][0]["asr_candidate"], "你")
+            self.assertEqual(result["flags"][0]["asr_translation"], "You")
             self.assertEqual(result["flags"][0]["suggestion"], "You")
             self.assertNotIn("review_error", result["flags"][0])
-            self.assertEqual(len(prompts), 2)
-            self.assertIn("source transcript is not Mandarin", prompts[0])
-            self.assertIn("Mandarin transcription: 你", prompts[1])
+            self.assertEqual(len(prompts), 3)
+            self.assertIn("Mandarin: 你", prompts[0])
+            self.assertNotIn("Behold", prompts[0])
+            self.assertIn("source transcript is not Mandarin", prompts[1])
+            self.assertIn("Mandarin transcription: 你", prompts[2])
 
             prompts.clear()
             def unchanged(*_args, **kwargs):

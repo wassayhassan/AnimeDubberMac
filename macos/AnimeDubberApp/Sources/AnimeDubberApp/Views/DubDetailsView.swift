@@ -21,6 +21,7 @@ struct DubDetailsView: View {
         let translation: String
         let suggestion: String
         let alternate: String
+        let alternateEnglish: String
         let reasons: [String]
         let duration: Double?
         let available: Double?
@@ -121,13 +122,26 @@ struct DubDetailsView: View {
                                             }.buttonStyle(.link)
                                         }
                                         if !cue.error.isEmpty { Text(cue.error).font(.caption).foregroundStyle(.orange) }
-                                        if !cue.alternate.isEmpty {
-                                            Text("Alternate transcription (unverified): \(cue.alternate)")
-                                                .font(.caption).foregroundStyle(.orange)
-                                        }
                                         if cue.reasons.contains("non_chinese_source") {
-                                            Text("The source transcript may be wrong. Listen to this cue in the original video before choosing the English line; the alternate transcript is only a clue.")
+                                            Text("The two speech passes disagree. You don't need to read Chinese: compare the English options and the scene. The alternate is an uncertain guess, especially for a very short cue.")
                                                 .font(.caption).foregroundStyle(.orange)
+                                            if !cue.alternateEnglish.isEmpty {
+                                                Text("Alternate English possibility: \(cue.alternateEnglish)")
+                                                    .font(.callout).foregroundStyle(.orange)
+                                                if cue.alternateEnglish != cue.translation {
+                                                    Button("Use alternate English") {
+                                                        reviewDraft[cue.id] = cue.alternateEnglish
+                                                    }.buttonStyle(.link)
+                                                }
+                                            } else {
+                                                Text("The app could not translate the alternate reliably. Keep the current line only if the scene supports it.")
+                                                    .font(.caption).foregroundStyle(.orange)
+                                            }
+                                        }
+                                        if !cue.alternate.isEmpty {
+                                            DisclosureGroup("Show raw alternate transcript") {
+                                                Text(cue.alternate).textSelection(.enabled)
+                                            }.font(.caption)
                                         }
                                         TextField("Approved translation", text: Binding(
                                             get: { reviewDraft[cue.id] ?? cue.translation },
@@ -309,6 +323,7 @@ struct DubDetailsView: View {
                              translation: row["translation"] as? String ?? "",
                              suggestion: row["suggestion"] as? String ?? "",
                              alternate: row["asr_candidate"] as? String ?? "",
+                             alternateEnglish: row["asr_translation"] as? String ?? "",
                              reasons: row["reasons"] as? [String] ?? [],
                              duration: issue["duration"] as? Double,
                              available: issue["available"] as? Double,
