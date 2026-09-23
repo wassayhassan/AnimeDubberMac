@@ -84,17 +84,18 @@ struct DubDetailsView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if dub.status == "paused" && dub.error == "Subtitle review required before voice generation" {
-                        GroupBox("Review Subtitles Before Dubbing") {
+                        GroupBox("Continue Paused Dub") {
                             VStack(alignment: .leading, spacing: 14) {
-                                Text("Compare the source and translation. Use a shorter suggestion if one is available, or edit the wording yourself. The app checks the generated voice duration again when you continue.")
+                                Text("The updated app can resolve subtitle review and timing automatically. Continue this version without editing Chinese subtitles.")
                                     .foregroundStyle(.secondary)
-                                if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
-                                if reviewCues.contains(where: { $0.reasons.contains("speech_overlap") }) {
-                                    Button("Try Automatic Fit and Continue", systemImage: "waveform.badge.magnifyingglass") {
-                                        state.resumeDub(dub)
-                                    }
-                                    .disabled(state.activeJobID != nil)
+                                Button("Continue Automatically", systemImage: "play.fill") {
+                                    state.resumeDub(dub)
                                 }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(state.activeJobID != nil)
+                                if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
+                                Text("Optional: inspect or edit a flagged line below.")
+                                    .font(.caption).foregroundStyle(.secondary)
                                 ForEach(reviewCues) { cue in
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("Cue \(cue.id) · \(cue.reasons.joined(separator: ", ").replacingOccurrences(of: "_", with: " "))")
