@@ -2044,6 +2044,20 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     else:
         raise PipelineError(f"Unsupported translation mode: {translation_mode}")
 
+    fixes_path = version_dir / f"{key}_{config.target_language}.timing-fixes.json"
+    try:
+        timing_fixes = (json.loads(fixes_path.read_text(encoding="utf-8"))
+                        if config.resume and not config.force and fixes_path.exists() else {})
+        if not isinstance(timing_fixes, dict):
+            timing_fixes = {}
+    except (OSError, ValueError):
+        timing_fixes = {}
+    for i, seg in enumerate(segments, 1):
+        fix = timing_fixes.get(str(i), {})
+        if (isinstance(fix, dict) and fix.get("source") == seg.text
+                and fix.get("original") == seg.translated and fix.get("replacement")):
+            seg.translated = fix["replacement"]
+
     # Subtitles are usable output in their own right. Publish them before voice
     # analysis so a slow or failed speaker pass cannot hold back the files.
     en_srt = version_dir / f"{key}_{config.target_language}.srt"
@@ -2085,7 +2099,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             or int(cue) - 1 not in decisions
             for cue, issue in review.get("timing_issues", {}).items()
         )
-        if decisions is None or timing_unresolved:
+        if (decisions is None or timing_unresolved) and not review.get("timing_issues"):
             if review.get("timing_issues"):
                 progress("A voice line would overlap the next cue. Review a shorter translation to continue.")
                 raise ReviewRequired("Subtitle review required before voice generation")
@@ -2109,7 +2123,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             publish("review_report", review_path, config.target_language)
             progress("Subtitle suggestions are ready. Review them in Dub Details, then continue this dub.")
             raise ReviewRequired("Subtitle review required before voice generation")
-        for idx, value in decisions.items():
+        for idx, value in (decisions or {}).items():
             segments[idx].translated = value
         if decisions:
             write_srt(segments, en_srt, translated=True)
@@ -2164,6 +2178,8 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     clips: List[Path] = []
     total_duration = ffprobe_duration(audio, runner)
     total_lines = len(segments)
+    from .timing import TimingRewriter
+    timing_rewriter = TimingRewriter(config, provider=translation_mode)
     for i, seg in enumerate(segments):
         runner.check_cancel()
         profile = profile_map.get(seg.speaker_id, {}) if config.multi_character else {}
@@ -2172,6 +2188,56 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             clips.append(prepare_tts_clip(seg, i, tts_dir, config, runner, progress,
                                           profile=profile, next_start=next_start))
         except TimingOverlapError as issue:
+            original = seg.translated
+            rejected = [original]
+            latest_issue = issue
+            repair_errors = []
+            repaired = False
+            for attempt in range(3):
+                runner.check_cancel()
+                try:
+                    candidate = timing_rewriter.candidate(seg.text, original, latest_issue.duration,
+                                                          issue.available, attempt, rejected, runner)
+                except CancelledError:
+                    raise
+                except Exception as exc:
+                    repair_errors.append(f"Automatic rewrite failed: {exc}")
+                    break
+                if not candidate:
+                    continue
+                rejected.append(candidate)
+                trial = Segment.from_dict(seg.to_dict())
+                trial.translated = candidate
+                progress(f"Testing shorter voice for line {i + 1} ({attempt + 1}/3)…")
+                try:
+                    clip = prepare_tts_clip(trial, i, tts_dir, config, runner, progress,
+                                            profile=profile, next_start=next_start)
+                except TimingOverlapError as measured:
+                    latest_issue = measured
+                    continue
+                seg.translated = candidate
+                clips.append(clip)
+                timing_fixes[str(i + 1)] = {"source": seg.text, "original": original,
+                                            "replacement": candidate,
+                                            "available": round(issue.available, 3)}
+                _atomic_json_write(fixes_path, timing_fixes)
+                publish("timing_fixes", fixes_path, config.target_language)
+                write_srt(segments, en_srt, translated=True)
+                write_vtt(segments, en_vtt, translated=True)
+                publish("translated_srt", en_srt, config.target_language)
+                publish("translated_vtt", en_vtt, config.target_language)
+                progress(f"Automatically fitted line {i + 1}: {candidate}")
+                repaired = True
+                break
+            if repaired:
+                if timing_path.exists():
+                    try:
+                        existing_issues = json.loads(timing_path.read_text(encoding="utf-8"))
+                        existing_issues.pop(str(i + 1), None)
+                        _atomic_json_write(timing_path, existing_issues)
+                    except (OSError, ValueError):
+                        pass
+                continue
             try:
                 issues = json.loads(timing_path.read_text(encoding="utf-8")) if timing_path.exists() else {}
             except (OSError, ValueError):
@@ -2181,7 +2247,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                                    "available": round(issue.available, 3)}
             _atomic_json_write(timing_path, issues)
             progress(f"Warning: {issue}")
-            review_errors = []
+            review_errors = repair_errors
             try:
                 review_subtitles(zh_srt, en_srt, review_path, language=config.target_language,
                                  context=config.context, glossary=config.glossary, progress=progress)

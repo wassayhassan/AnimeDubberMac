@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from anime_dubber.core import CommandRunner, Config, ReviewRequired, Segment, TimingOverlapError, run_pipeline
 from anime_dubber.review import review_subtitles
+from anime_dubber.timing import TimingRewriter, usable_rewrite
 
 
 def srt(texts):
@@ -18,6 +20,71 @@ def srt(texts):
 
 
 class ReviewTests(unittest.TestCase):
+    def test_auto_rewrite_measures_voice_and_finishes_without_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            video = base / "source.mp4"; video.write_bytes(b"video")
+            audio = base / "audio.wav"; audio.write_bytes(b"audio")
+            cfg = Config(source=str(video), output_dir=base / "out", version_id="auto_fit",
+                         translation="llm", multi_character=False)
+            original = "The once famous Tang Sect"
+            tested = []
+
+            def prepare(seg, *_args, **_kwargs):
+                tested.append(seg.translated)
+                if seg.translated in (original, "The Tang Sect"):
+                    raise TimingOverlapError(0, 3.2 if seg.translated == original else 3.0,
+                                             2.8, seg.translated)
+                return audio
+
+            def transcribe(*_args, **_kwargs):
+                return [Segment(0, .5, "唐门")]
+
+            def translate(items, *_args):
+                items[0].translated = original
+                return items
+
+            with patch("anime_dubber.core.download_source", return_value=video), \
+                 patch("anime_dubber.core.extract_audio", return_value=audio), \
+                 patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
+                 patch("anime_dubber.core.transcribe_audio", side_effect=transcribe), \
+                 patch("anime_dubber.core.translate_with_llm", side_effect=translate), \
+                 patch("anime_dubber.core.prepare_tts_clip", side_effect=prepare), \
+                 patch("anime_dubber.timing.TimingRewriter.candidate", side_effect=["The Tang Sect", "Tang Sect"]) as candidate, \
+                 patch("anime_dubber.core.ffprobe_duration", return_value=2.8), \
+                 patch("anime_dubber.core.render_dub_timeline", return_value=audio), \
+                 patch("anime_dubber.core.build_dialogue_safe_background", return_value=audio), \
+                 patch("anime_dubber.core.mix_background_and_dub", return_value=audio), \
+                 patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
+                result = run_pipeline(cfg, lambda _: None, CommandRunner())
+                resumed = run_pipeline(cfg, lambda _: None, CommandRunner())
+            self.assertEqual(candidate.call_count, 2)
+            self.assertEqual(tested, [original, "The Tang Sect", "Tang Sect", "Tang Sect"])
+            self.assertIn("Tang Sect", result["translated_srt"].read_text())
+            self.assertIn("Tang Sect", resumed["translated_srt"].read_text())
+            fixes = json.loads(next((base / "out" / "versions" / "auto_fit").glob("*.timing-fixes.json")).read_text())
+            self.assertEqual(fixes["1"]["replacement"], "Tang Sect")
+
+    def test_timing_candidate_keeps_names_and_numbers(self):
+        self.assertFalse(usable_rewrite("The Tang Sect has 3 gates", "The sect has three gates"))
+        self.assertFalse(usable_rewrite("The Tang Sect has 3 gates", "The Tang Sect has gates"))
+        self.assertTrue(usable_rewrite("The Tang Sect has 3 gates", "Tang Sect: 3 gates"))
+
+    def test_rewriter_requests_measured_gap_and_checks_candidate(self):
+        prompts = []
+        fake = type("FakeMLX", (), {
+            "load": staticmethod(lambda _: (object(), object())),
+            "generate": staticmethod(lambda _model, _tokenizer, **kwargs: (
+                prompts.append(kwargs["prompt"]) or '[{"id": 1, "text": "Tang Sect, once famous"}]')),
+        })()
+        cfg = Config(source="video", output_dir=Path("out"))
+        with patch.dict(sys.modules, {"mlx_lm": fake}):
+            candidate = TimingRewriter(cfg).candidate("唐门", "The Tang Sect was once famous",
+                                                       3.29, 2.82, 0, [], CommandRunner())
+        self.assertEqual(candidate, "Tang Sect, once famous")
+        self.assertIn("3.29s", prompts[0])
+        self.assertIn("2.82s", prompts[0])
+
     def test_natural_speech_overlap_pauses_for_edit_and_resumes(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

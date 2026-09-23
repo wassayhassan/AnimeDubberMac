@@ -218,6 +218,7 @@ AnimeDubber retains the v3.4/v3.5 fixes:
 - duplicate micro-segments are collapsed;
 - zero-sample TTS clips are rejected;
 - TTS lead-in silence is trimmed;
+- lines that overrun the next voice get up to three shorter model rewrites, each measured with the selected voice; successful wording is saved with the subtitle version, while lines that still cannot fit pause for review;
 - untouched original soundtrack is preserved outside dialogue;
 - Demucs `no_vocals` is used only around detected source dialogue;
 - pre/post dialogue guards reduce source-voice bleed;

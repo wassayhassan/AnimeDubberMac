@@ -85,6 +85,12 @@ struct DubDetailsView: View {
                                 Text("Compare the source and translation. Use a shorter suggestion if one is available, or edit the wording yourself. The app checks the generated voice duration again when you continue.")
                                     .foregroundStyle(.secondary)
                                 if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
+                                if reviewCues.contains(where: { $0.reasons.contains("speech_overlap") }) {
+                                    Button("Try Automatic Fit and Continue", systemImage: "waveform.badge.magnifyingglass") {
+                                        state.resumeDub(dub)
+                                    }
+                                    .disabled(state.activeJobID != nil)
+                                }
                                 ForEach(reviewCues) { cue in
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("Cue \(cue.id) · \(cue.reasons.joined(separator: ", ").replacingOccurrences(of: "_", with: " "))")
