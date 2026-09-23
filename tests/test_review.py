@@ -41,6 +41,18 @@ class ReviewTests(unittest.TestCase):
                     raise TimingOverlapError(0, 1.5, 1.0, seg.translated)
                 return audio
 
+            model_attempts = []
+            def model_review(command, **_kwargs):
+                model = command[command.index("--model") + 1]
+                model_attempts.append(model)
+                if model == cfg.review_model:
+                    raise ValueError("Larger model unavailable")
+                report = Path(command[command.index("--report") + 1])
+                data = json.loads(report.read_text(encoding="utf-8"))
+                data["flags"][0]["suggestion"] = "Hi"
+                report.write_text(json.dumps(data), encoding="utf-8")
+            runner.run = model_review
+
             with patch("anime_dubber.core.download_source", return_value=video), \
                  patch("anime_dubber.core.extract_audio", return_value=audio), \
                  patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
@@ -52,12 +64,16 @@ class ReviewTests(unittest.TestCase):
                  patch("anime_dubber.core.build_dialogue_safe_background", return_value=audio), \
                  patch("anime_dubber.core.mix_background_and_dub", return_value=audio), \
                  patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
-                with self.assertRaises(ReviewRequired):
-                    run_pipeline(cfg, lambda _: None, runner)
+                with patch("anime_dubber.core.platform.system", return_value="Darwin"), \
+                     patch("anime_dubber.core.platform.machine", return_value="arm64"):
+                    with self.assertRaises(ReviewRequired):
+                        run_pipeline(cfg, lambda _: None, runner)
                 report = next((base / "out" / "versions" / "dub_timing").glob("*.review.json"))
                 flagged = json.loads(report.read_text())
                 self.assertEqual(flagged["priority_cues"], [1])
                 self.assertIn("speech_overlap", flagged["flags"][0]["reasons"])
+                self.assertEqual(flagged["flags"][0]["suggestion"], "Hi")
+                self.assertEqual(model_attempts, [cfg.review_model, cfg.llm_model])
                 approval = report.with_name(report.name.replace(".review.json", ".review-approval.json"))
                 approval.write_text(json.dumps({"signature": flagged["signature"],
                                                 "revisions": {"1": "Hello"}}))
@@ -128,6 +144,31 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(result["priority_cues"], [1, 2])
             self.assertEqual(len(prompts), 1)
             self.assertEqual(result["flags"][1]["suggestion"], "Show-off")
+
+    def test_timing_suggestion_uses_measured_gap_instead_of_subtitle_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            a, b, report = base / "zh.srt", base / "en.srt", base / "en.review.json"
+            a.write_text(srt(["来听故事"]), encoding="utf-8")
+            b.write_text(srt(["Come and listen to this very long story about the world"]), encoding="utf-8")
+            (base / "en.timing.json").write_text(json.dumps({"1": {
+                "attempted_translation": "Come and listen to this very long story about the world",
+                "duration": 13.4, "available": 11.5}}), encoding="utf-8")
+            class Tokenizer:
+                chat_template = None
+            prompts = []
+            def fake_generate(*args, **kwargs):
+                prompts.append(kwargs["prompt"])
+                return '[{"id": 1, "text": "Hear the story of this world."}]'
+            with patch.dict("sys.modules", {"mlx_lm": type("FakeMLX", (), {
+                "load": staticmethod(lambda _: (object(), Tokenizer())),
+                "generate": staticmethod(fake_generate),
+            })()}):
+                result = review_subtitles(a, b, report, model="test", focus_cues={1})
+            self.assertIn("13.40s", prompts[0])
+            self.assertIn("11.50s", prompts[0])
+            self.assertNotIn("Subtitle time window: 0.50s", prompts[0])
+            self.assertEqual(result["flags"][0]["suggestion"], "Hear the story of this world.")
 
     def test_non_chinese_source_is_prioritized_for_retranscription(self):
         with tempfile.TemporaryDirectory() as temp:
