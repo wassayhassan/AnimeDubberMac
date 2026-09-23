@@ -14,6 +14,7 @@ from anime_dubber.core import (
     TimingOverlapError,
     ffprobe_duration,
     mix_background_and_dub,
+    mux_video,
     build_dialogue_safe_background,
     render_dub_timeline,
     prepare_tts_clip,
@@ -250,6 +251,24 @@ class FfmpegPipelineTests(unittest.TestCase):
                 with self.assertRaises(TimingOverlapError):
                     prepare_tts_clip(seg, 3, d / "tts", cfg, CommandRunner(), messages.append,
                                      next_start=6.0, max_tempo=1.5)
+
+            with patch("anime_dubber.core.synthesize_macos", side_effect=fake_say):
+                fallback = prepare_tts_clip(seg, 4, d / "tts", cfg, runner, messages.append,
+                                            next_start=None, max_tempo=1.5)
+            self.assertLessEqual(ffprobe_duration(fallback, runner), 1.4)
+
+    def test_final_frame_extends_for_last_voice(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            video, sound, output = (d / name for name in ("video.mp4", "sound.wav", "dub.mp4"))
+            subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                            "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=24:d=1",
+                            "-c:v", "mpeg4", str(video)], check=True)
+            subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                            "-f", "lavfi", "-i", "sine=frequency=440:duration=1.8",
+                            str(sound)], check=True)
+            mux_video(video, sound, output, CommandRunner(), lambda _message: None, extend_by=.9)
+            self.assertGreater(ffprobe_duration(output, CommandRunner()), 1.75)
 
     def test_trailing_tts_silence_does_not_force_fast_speech(self):
         with tempfile.TemporaryDirectory() as td:

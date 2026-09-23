@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, urlparse
 
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
-LLM_MODEL = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+WHISPER_MODEL = "mlx-community/whisper-large-v3-mlx"
+LLM_MODEL = "mlx-community/Qwen3-8B-4bit"
 DEMUCS_MODEL = "htdemucs"
 SAMPLE_RATE = 44100
 DIALOGUE_GUARD_PRE = 0.24
@@ -168,7 +168,7 @@ class Config:
     speaker_threshold: float = 0.0
     series_id: str = ""
     speaker_backend: str = "auto"  # auto|ecapa|acoustic
-    review_before_dub: bool = False
+    review_before_dub: bool = True
     review_model: str = "mlx-community/Qwen3-8B-4bit"
 
 
@@ -1504,7 +1504,7 @@ def prepare_tts_clip(
     else:
         source_audio = speech_audio
     available = max(0.0, next_start - seg.start) if next_start is not None else None
-    tempo = 1.0
+    tempo = min(max_tempo, 1.5) if available is None else 1.0
     if available is not None and source_dur > available + 0.03:
         if max_tempo > 1.0 and available > 0:
             tempo = min(max_tempo, 1.5, source_dur / max(0.001, available - 0.015))
@@ -1900,18 +1900,31 @@ def _mix_to_temp(background, dub, temp, out, bg_duration, config, runner, progre
     return out
 
 
-def mux_video(video: Path, audio: Path, final: Path, runner: CommandRunner, progress: ProgressCallback) -> None:
+def mux_video(video: Path, audio: Path, final: Path, runner: CommandRunner,
+              progress: ProgressCallback, extend_by: float = 0.0) -> None:
     final.parent.mkdir(parents=True, exist_ok=True)
     progress("Creating final dubbed MP4…")
     temp = final.with_name(final.stem + ".partial" + final.suffix)
     temp.unlink(missing_ok=True)
     try:
-        _mux_to_temp(video, audio, temp, final, runner)
+        _mux_to_temp(video, audio, temp, final, runner, extend_by=extend_by)
     finally:
         temp.unlink(missing_ok=True)
 
 
-def _mux_to_temp(video: Path, audio: Path, temp: Path, final: Path, runner: CommandRunner) -> None:
+def _mux_to_temp(video: Path, audio: Path, temp: Path, final: Path, runner: CommandRunner,
+                 extend_by: float = 0.0) -> None:
+    if extend_by > 0.02:
+        codec = "h264_videotoolbox" if platform.system() == "Darwin" else "libx264"
+        runner.run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(video), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0",
+            "-vf", f"tpad=stop_mode=clone:stop_duration={extend_by + 0.1:.3f}",
+            "-c:v", codec, "-b:v", "6M", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", "-shortest", str(temp),
+        ])
+        temp.replace(final)
+        return
     cp = runner.run([
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(video), "-i", str(audio),
@@ -2050,7 +2063,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     if config.target_language != "en" and translation_mode == "whisper":
         raise PipelineError("Whisper direct translation only supports English; choose LLM or Ollama.")
     if config.review_before_dub and config.mode == "dub" and translation_mode == "whisper":
-        raise PipelineError("Automatic subtitle review needs line-aligned LLM or Ollama translation. Choose one of those providers or turn off review.")
+        progress("Direct Whisper translation does not provide aligned source cues for automatic review")
 
     if translation_mode == "llm":
         segments = translate_with_llm(zh_segments, config, work, runner, progress)
@@ -2106,23 +2119,11 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         progress(f"Subtitle review: {review['flagged_cues']} cues flagged; report: {review_path}")
     except (OSError, ValueError) as exc:
         progress(f"Warning: subtitle review skipped: {exc}")
-        if config.review_before_dub and config.mode == "dub":
-            raise PipelineError(f"Cannot prepare subtitle review: {exc}") from exc
 
-    if config.mode == "dub" and (config.review_before_dub or review.get("timing_issues")) and review.get("priority_cues"):
+    if config.mode == "dub" and config.review_before_dub and review.get("priority_cues"):
         from .review import approved_revisions
         decisions = approved_revisions(approval_path, review, len(segments))
-        timing_unresolved = any(
-            decisions is None or decisions.get(int(cue) - 1) == issue.get("attempted_translation")
-            or int(cue) - 1 not in decisions
-            for cue, issue in review.get("timing_issues", {}).items()
-        )
-        if (decisions is None or timing_unresolved) and not review.get("timing_issues"):
-            if review.get("timing_issues"):
-                progress("A voice line would overlap the next cue. Review a shorter translation to continue.")
-                raise ReviewRequired("Subtitle review required before voice generation")
-            if platform.system() != "Darwin" or platform.machine() != "arm64":
-                raise PipelineError("Automatic MLX review requires an Apple silicon Mac. Disable review or run the CLI review separately.")
+        if decisions is None and platform.system() == "Darwin" and platform.machine() == "arm64":
             progress("Reviewing flagged subtitles with stronger local models…")
             args = [sys.executable, "-m", "anime_dubber.cli", "review-subtitles", str(zh_srt),
                     str(en_srt), "--report", str(review_path), "--target-language", config.target_language,
@@ -2139,8 +2140,27 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                 _atomic_json_write(review_path, review)
             review = json.loads(review_path.read_text(encoding="utf-8"))
             publish("review_report", review_path, config.target_language)
-            progress("Subtitle suggestions are ready. Review them in Dub Details, then continue this dub.")
-            raise ReviewRequired("Subtitle review required before voice generation")
+            decisions = {}
+            for row in review.get("flags", []):
+                if row.get("cue") not in review.get("priority_cues", []):
+                    continue
+                reasons = set(row.get("reasons", []))
+                if "speech_overlap" in reasons:
+                    continue  # Timing rewrites are measured against the actual voice below.
+                proposed = (row.get("asr_translation") if "non_chinese_source" in reasons
+                            else row.get("suggestion"))
+                proposed = str(proposed or "").strip()
+                if (proposed and proposed.casefold() != str(row.get("translation", "")).casefold()
+                        and (reasons & {"non_chinese_source", "mixed_script_in_source",
+                                        "untranslated_chinese", "untranslated_text", "literal_idiom"})):
+                    decisions[int(row["cue"]) - 1] = proposed
+            _atomic_json_write(approval_path, {"signature": review["signature"],
+                                               "revisions": {str(k + 1): v for k, v in decisions.items()},
+                                               "automatic": True})
+            progress(f"Automatic subtitle review applied {len(decisions)} corrections")
+        elif decisions is None:
+            decisions = {}
+            progress("Warning: stronger local review unavailable; continuing with translated subtitles")
         for idx, value in (decisions or {}).items():
             segments[idx].translated = value
         if decisions:
@@ -2206,9 +2226,12 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
         saved_tempo = (min(1.5, float(saved_fix.get("max_tempo", 1.0)))
                        if isinstance(saved_fix, dict) and saved_fix.get("source") == seg.text
                        and saved_fix.get("replacement") == seg.translated else 1.0)
+        saved_overlap = (isinstance(saved_fix, dict) and saved_fix.get("source") == seg.text
+                         and saved_fix.get("replacement") == seg.translated
+                         and saved_fix.get("allow_overlap") is True)
         try:
             clips.append(prepare_tts_clip(seg, i, tts_dir, config, runner, progress,
-                                          profile=profile, next_start=next_start,
+                                          profile=profile, next_start=None if saved_overlap else next_start,
                                           **({"max_tempo": saved_tempo} if saved_tempo > 1.0 else {})))
         except TimingOverlapError as issue:
             original = seg.translated
@@ -2226,6 +2249,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                     raise
                 except Exception as exc:
                     repair_errors.append(f"Automatic rewrite failed: {exc}")
+                    progress(f"Warning: {repair_errors[-1]}")
                     break
                 if not candidate:
                     continue
@@ -2295,56 +2319,34 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                     except (OSError, ValueError):
                         pass
                 continue
-            try:
-                issues = json.loads(timing_path.read_text(encoding="utf-8")) if timing_path.exists() else {}
-            except (OSError, ValueError):
-                issues = {}
-            issues[str(i + 1)] = {"attempted_translation": issue.translation,
-                                   "duration": round(issue.duration, 3),
-                                   "available": round(issue.available, 3)}
-            _atomic_json_write(timing_path, issues)
-            progress(f"Warning: {issue}")
-            review_errors = repair_errors
-            try:
-                review_subtitles(zh_srt, en_srt, review_path, language=config.target_language,
-                                 context=config.context, glossary=config.glossary, progress=progress)
-                if platform.system() == "Darwin" and platform.machine() == "arm64":
-                    models = list(dict.fromkeys((config.review_model, config.llm_model)))
-                    for model in models:
-                        try:
-                            progress(f"Suggesting shorter wording for line {i + 1} with {model}…")
-                            runner.run([sys.executable, "-m", "anime_dubber.cli", "review-subtitles",
-                                        str(zh_srt), str(en_srt), "--report", str(review_path),
-                                        "--target-language", config.target_language, "--model", model,
-                                        "--cue", str(i + 1), "--context", config.context,
-                                        "--glossary-json", json.dumps(config.glossary, ensure_ascii=False)])
-                            current = json.loads(review_path.read_text(encoding="utf-8"))
-                            row = next((r for r in current.get("flags", []) if r.get("cue") == i + 1), {})
-                            suggestion = str(row.get("suggestion") or "").strip()
-                            if suggestion and len(suggestion) < len(issue.translation) * 0.9:
-                                break
-                            review_errors.append(f"{model}: no substantially shorter suggestion")
-                        except CancelledError:
-                            raise
-                        except (PipelineError, OSError, ValueError) as exc:
-                            review_errors.append(f"{model}: {str(exc).splitlines()[-1][:300]}")
-                else:
-                    review_errors.append("Automatic local suggestions require an Apple silicon Mac")
-            except CancelledError:
-                raise
-            except (PipelineError, OSError, ValueError, ImportError, RuntimeError) as exc:
-                review_errors.append(str(exc))
-            if review_errors:
-                current = json.loads(review_path.read_text(encoding="utf-8"))
-                row = next((r for r in current.get("flags", []) if r.get("cue") == i + 1), {})
-                if not row.get("suggestion") or len(str(row["suggestion"])) >= len(issue.translation) * 0.9:
-                    current["review_error"] = (f"No usable shorter suggestion for line {i + 1}. "
-                                               "Edit the line manually. "
-                                               + "; ".join(review_errors))
-                    _atomic_json_write(review_path, current)
-                    progress(f"Warning: {current['review_error']}")
-            publish("review_report", review_path, config.target_language)
-            raise ReviewRequired("Subtitle review required before voice generation") from issue
+            # Complete the dub even when the available gap is physically too
+            # short at 1.5x. Keep all spoken words and report the audible overlap.
+            # The last line may extend the video with a held final frame below.
+            fallback = min(measured_options, key=lambda option: option[1])
+            seg.translated = fallback[0]
+            trial = Segment.from_dict(seg.to_dict())
+            progress(f"Warning: line {i + 1} cannot fit even at 1.5×; retaining its full voice clip")
+            clip = prepare_tts_clip(trial, i, tts_dir, config, runner, progress,
+                                    profile=profile, next_start=None, max_tempo=1.5)
+            clips.append(clip)
+            timing_fixes[str(i + 1)] = {"source": seg.text, "original": original,
+                                        "replacement": fallback[0], "allow_overlap": True,
+                                        "available": round(issue.available, 3), "max_tempo": 1.5}
+            _atomic_json_write(fixes_path, timing_fixes)
+            publish("timing_fixes", fixes_path, config.target_language)
+            if fallback[0] != original:
+                write_srt(segments, en_srt, translated=True)
+                write_vtt(segments, en_vtt, translated=True)
+                publish("translated_srt", en_srt, config.target_language)
+                publish("translated_vtt", en_vtt, config.target_language)
+            if timing_path.exists():
+                try:
+                    existing_issues = json.loads(timing_path.read_text(encoding="utf-8"))
+                    existing_issues.pop(str(i + 1), None)
+                    _atomic_json_write(timing_path, existing_issues)
+                except (OSError, ValueError):
+                    pass
+            continue
         if timing_path.exists():
             try:
                 previous_issues = json.loads(timing_path.read_text(encoding="utf-8"))
@@ -2358,6 +2360,28 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             reused = getattr(runner, "reused_voice_clips", 0)
             progress(f"Generating dub voice: {i + 1}/{total_lines}{who} · {reused} reused")
 
+    last_fix = timing_fixes.get(str(total_lines), {})
+    extend_last_line = isinstance(last_fix, dict) and last_fix.get("allow_overlap") is True
+    extra_seconds = (max(0.0, segments[-1].start + ffprobe_duration(clips[-1], runner) - total_duration)
+                     if extend_last_line else 0.0)
+    if extra_seconds > 0.02:
+        original_duration = total_duration
+        total_duration += extra_seconds + 0.1
+        progress(f"Warning: extending the final frame by {extra_seconds:.2f}s to finish the last voice")
+        for label, path in (("original", audio), ("separated", background)):
+            padded = work / f"{label}_padded_{int(total_duration * 1000)}.wav"
+            if config.force or not config.resume or not _complete_wav(padded, minimum_seconds=total_duration * .98):
+                _atomic_media_run(runner, [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+                    "-af", "apad", "-t", f"{total_duration:.6f}",
+                    "-ac", "2", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(padded),
+                ], padded)
+            if label == "original":
+                audio = padded
+            else:
+                background = padded
+    else:
+        original_duration = total_duration
     duration_callback = getattr(runner, "duration", None)
     if duration_callback:
         duration_callback(total_duration)
@@ -2367,7 +2391,10 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     )
     mixed = mix_background_and_dub(background_bed, dub_timeline, work, config, runner, progress)
     final = version_dir / f"{key}_{config.target_language.upper()}_DUB.mp4"
-    mux_video(video, mixed, final, runner, progress)
+    if total_duration > original_duration + 0.02:
+        mux_video(video, mixed, final, runner, progress, total_duration - original_duration)
+    else:
+        mux_video(video, mixed, final, runner, progress)
     results["dubbed_video"] = final
     exported_audio = version_dir / f"{key}_{config.target_language.upper()}_DUB.m4a"
     if mixed != exported_audio:

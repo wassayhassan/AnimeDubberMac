@@ -218,7 +218,7 @@ AnimeDubber retains the v3.4/v3.5 fixes:
 - duplicate micro-segments are collapsed;
 - zero-sample TTS clips are rejected;
 - TTS lead-in silence is trimmed;
-- lines that overrun the next voice get up to three shorter model rewrites, each measured with the selected voice; if none fits naturally, the app tries pitch-preserving speedup capped at 1.5× and pauses for review only if the voice still cannot fit;
+- lines that overrun the next voice get up to three shorter model rewrites, each measured with the selected voice; if none fits naturally, the app tries pitch-preserving speedup capped at 1.5×, then keeps the full voice with a logged overlap if the gap is physically too short;
 - untouched original soundtrack is preserved outside dialogue;
 - Demucs `no_vocals` is used only around detected source dialogue;
 - pre/post dialogue guards reduce source-voice bleed;
@@ -259,8 +259,8 @@ Existing compatible caches are reused during the v4 migration.
 Apple Silicon macOS:
 
 - ASR: MLX Whisper
-- translation: `mlx-community/Qwen3-4B-Instruct-2507-4bit`
-- optional full Whisper Large v3 and Qwen3 8B/14B or experimental Qwen3.5 9B in New Dub and Settings
+- transcription: full Whisper Large v3 by default; Turbo remains a faster option
+- translation and automatic subtitle review: `mlx-community/Qwen3-8B-4bit` by default on supported Macs; 4B remains a faster option and 14B remains a high-memory option
 - preferred local TTS: Chatterbox Turbo when installed
 - fast local TTS: Kokoro when installed
 - compatibility fallback: macOS `say`
@@ -315,8 +315,8 @@ python -m anime_dubber.cli review-subtitles \
 
 The command prints elapsed model-load and review time and saves a `.review.json` next to the translated SRT. On a subsequent invocation with the same inputs, completed suggestions are reused. Remove `--sample-seconds 300` to process remaining flagged cues. For a second transcription of suspicious source lines, add `--audio /path/to/extracted_dialogue.wav`; this loads the full Whisper Large v3 model and records its own timing. Use the separated dialogue WAV where possible. The alternate transcription and proposed translations are **unverified suggestions** in the report, not automatic changes to the existing SRT or dub. Model downloads are required on first use; this test measures incremental review cost, not the speed of full transcription or TTS.
 
-For a new dub on Apple silicon, enable **Review flagged lines before voices** in New Dub, or pass `--review-before-dub` to the CLI. The app saves both SRTs, runs the larger local translation model and a second transcription of the most suspicious speech cues, then pauses before voice generation. In Dub Details, compare each priority cue and choose its wording, then select **Approve and Continue Dub**. An unchanged line keeps its original translation. The decision and model suggestions are saved per dub so interrupted review can resume without redoing transcription or translation. The setting is opt-in because the first model downloads and the review pass can add substantial time on a 16 GB Mac.
+For a new dub on Apple silicon, **Automatically check and correct subtitles** is enabled by default. The app saves both SRTs, runs the local review model and a second transcription for suspicious speech, applies plausible corrections, and continues without a review pause. The report records alternate hypotheses and automatic changes; a short disputed cue cannot be guaranteed correct by any speech model. Models download on first use, and the review adds processing time on a 16 GB Mac. Use `--no-auto-review` to disable it in the CLI.
 
-For headless jobs, inspect the `*.review.json` file, then run `python -m anime_dubber.cli approve-review PROJECT_ID DUB_ID -o OUTPUT_DIR` to keep the original lines, or pass `--revisions corrections.json` with a JSON object such as `{"199": "Approved line"}`. Finally run `python -m anime_dubber.cli resume-dub PROJECT_ID DUB_ID -o OUTPUT_DIR`. If a stronger model fails, the job still pauses with the saved original subtitles and a warning; you can approve the original text or edit it before continuing.
+For headless jobs, inspect the `*.review.json` file for the automatic corrections and unresolved uncertainty after the dub. If a review model fails, the job continues with the original translation and reports the failure. `approve-review` and `resume-dub` remain available for older paused versions.
 
-Voice clips play at their generated pace and may continue beyond the subtitle end if there is room before the next cue. When a clip would overlap the next voice or run past the video's end, the app first tries up to three shorter translations and measures each rendered voice. If they still cannot fit naturally, it tries pitch-preserving speedup up to 1.5×, measuring the final audio again. It pauses for review only when the voice still does not fit. Clips are never cut short. Select full Whisper Large v3 and a larger translation model in New Dub, or supply model IDs in Settings. A model choice starts applying to a new dub; an existing rendered video keeps its audio.
+Voice clips may continue beyond the subtitle end if there is room before the next cue. When a clip would overlap the next voice or run past the video's end, the app tries up to three shorter translations and measures each rendered voice. If they still cannot fit naturally, it tries pitch-preserving speedup up to 1.5×. When the gap is too short even then, the app keeps the full sped-up line and reports any audible overlap. For an overlong final line, it extends the video with a held final frame so the words are not cut. This is a best-effort automatic result, and tightly spaced speech can still sound crowded. New model choices apply to new dubs; an existing rendered video keeps its audio.

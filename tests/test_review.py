@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from anime_dubber.core import CommandRunner, Config, ReviewRequired, Segment, TimingOverlapError, run_pipeline
+from anime_dubber.core import CommandRunner, Config, PipelineError, ReviewRequired, Segment, TimingOverlapError, run_pipeline
 from anime_dubber.review import review_subtitles
 from anime_dubber.timing import TimingRewriter, usable_rewrite
 
@@ -129,7 +129,7 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("3.29s", prompts[0])
         self.assertIn("2.82s", prompts[0])
 
-    def test_natural_speech_overlap_pauses_for_edit_and_resumes(self):
+    def test_unfittable_speech_completes_with_overlap_warning(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             video = base / "source.mp4"; video.write_bytes(b"video")
@@ -148,21 +148,11 @@ class ReviewTests(unittest.TestCase):
 
             def prepare(seg, *_args, **_kwargs):
                 generated.append(seg.translated)
-                if seg.translated == "A long greeting":
+                if seg.translated == "A long greeting" and _kwargs.get("next_start") is not None:
                     raise TimingOverlapError(0, 1.5, 1.0, seg.translated)
                 return audio
 
-            model_attempts = []
-            def model_review(command, **_kwargs):
-                model = command[command.index("--model") + 1]
-                model_attempts.append(model)
-                if model == cfg.review_model:
-                    raise ValueError("Larger model unavailable")
-                report = Path(command[command.index("--report") + 1])
-                data = json.loads(report.read_text(encoding="utf-8"))
-                data["flags"][0]["suggestion"] = "Hi"
-                report.write_text(json.dumps(data), encoding="utf-8")
-            runner.run = model_review
+            warnings = []
 
             with patch("anime_dubber.core.download_source", return_value=video), \
                  patch("anime_dubber.core.extract_audio", return_value=audio), \
@@ -170,27 +160,18 @@ class ReviewTests(unittest.TestCase):
                  patch("anime_dubber.core.transcribe_audio", side_effect=transcribe), \
                  patch("anime_dubber.core.translate_with_llm", side_effect=translate), \
                  patch("anime_dubber.core.prepare_tts_clip", side_effect=prepare), \
+                 patch("anime_dubber.timing.TimingRewriter.candidate", return_value=None), \
                  patch("anime_dubber.core.ffprobe_duration", return_value=1.0), \
                  patch("anime_dubber.core.render_dub_timeline", return_value=audio), \
                  patch("anime_dubber.core.build_dialogue_safe_background", return_value=audio), \
                  patch("anime_dubber.core.mix_background_and_dub", return_value=audio), \
                  patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
-                with patch("anime_dubber.core.platform.system", return_value="Darwin"), \
-                     patch("anime_dubber.core.platform.machine", return_value="arm64"):
-                    with self.assertRaises(ReviewRequired):
-                        run_pipeline(cfg, lambda _: None, runner)
-                report = next((base / "out" / "versions" / "dub_timing").glob("*.review.json"))
-                flagged = json.loads(report.read_text())
-                self.assertEqual(flagged["priority_cues"], [1])
-                self.assertIn("speech_overlap", flagged["flags"][0]["reasons"])
-                self.assertEqual(flagged["flags"][0]["suggestion"], "Hi")
-                self.assertEqual(model_attempts, [cfg.review_model, cfg.llm_model])
-                approval = report.with_name(report.name.replace(".review.json", ".review-approval.json"))
-                approval.write_text(json.dumps({"signature": flagged["signature"],
-                                                "revisions": {"1": "Hello"}}))
-                result = run_pipeline(cfg, lambda _: None, runner)
-            self.assertEqual(generated, ["A long greeting", "A long greeting", "Hello"])
-            self.assertIn("Hello", result["translated_srt"].read_text())
+                result = run_pipeline(cfg, warnings.append, runner)
+                resumed = run_pipeline(cfg, warnings.append, runner)
+            self.assertEqual(generated, ["A long greeting"] * 4)
+            self.assertTrue(any("cannot fit" in message for message in warnings))
+            self.assertIn("A long greeting", result["translated_srt"].read_text())
+            self.assertTrue(resumed["dubbed_video"].exists())
 
     def test_flags_source_and_translation_without_changing_srt(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -340,7 +321,7 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(revised["flags"][0]["suggestion"], "You")
             self.assertEqual(len(prompts), 2)
 
-    def test_review_pauses_before_voices_and_resume_applies_approved_cue(self):
+    def test_review_corrects_priority_cue_without_manual_approval(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             video = base / "source.mp4"; video.write_bytes(b"video")
@@ -357,13 +338,15 @@ class ReviewTests(unittest.TestCase):
                 self.assertIn("review-subtitles", command)
                 report = Path(command[command.index("--report") + 1])
                 data = json.loads(report.read_text())
-                data["flags"][0]["suggestion"] = "A sly trickster"
+                data["flags"][0]["suggestion"] = "Behold"
+                data["flags"][0]["asr_candidate"] = "你"
+                data["flags"][0]["asr_translation"] = "You"
                 report.write_text(json.dumps(data))
             runner.run = model_review
             def transcribe(*_args, **_kwargs):
-                return [Segment(0, .5, "老六")]
+                return [Segment(0, .5, "behold")]
             def translate(items, *_args):
-                items[0].translated = "Old Six"
+                items[0].translated = "Behold"
                 return items
             def prepare(seg, *_args, **_kwargs):
                 clips.append(seg.translated)
@@ -381,17 +364,24 @@ class ReviewTests(unittest.TestCase):
                  patch("anime_dubber.core.build_dialogue_safe_background", return_value=background), \
                  patch("anime_dubber.core.mix_background_and_dub", return_value=mixed), \
                  patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
-                with self.assertRaises(ReviewRequired):
-                    run_pipeline(config, lambda _: None, runner)
-                self.assertEqual(clips, [])
+                result = run_pipeline(config, lambda _: None, runner)
                 report = next((base / "out" / "versions" / "dub_review").glob("*.review.json"))
                 data = json.loads(report.read_text())
                 approval = report.with_name(report.name.replace(".review.json", ".review-approval.json"))
-                approval.write_text(json.dumps({"signature": data["signature"], "revisions": {"1": "A sly trickster"}}))
+                saved = json.loads(approval.read_text())
+                self.assertEqual(saved["signature"], data["signature"])
+                self.assertEqual(saved["revisions"], {"1": "You"})
                 runner.run = lambda *_args, **_kwargs: self.fail("Model must not run after approval")
-                result = run_pipeline(config, lambda _: None, runner)
-            self.assertEqual(clips, ["A sly trickster"])
-            self.assertIn("A sly trickster", result["translated_srt"].read_text())
+                run_pipeline(config, lambda _: None, runner)
+                self.assertIn("You", result["translated_srt"].read_text())
+                approval.unlink()
+                report.unlink()
+                runner.run = lambda *_args, **_kwargs: (_ for _ in ()).throw(PipelineError("Model unavailable"))
+                warning_messages = []
+                fallback = run_pipeline(config, warning_messages.append, runner)
+            self.assertEqual(clips, ["You", "You", "Behold"])
+            self.assertIn("Behold", fallback["translated_srt"].read_text())
+            self.assertTrue(any("stronger subtitle review failed" in msg for msg in warning_messages))
 
 
 if __name__ == "__main__":

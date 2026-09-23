@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
             help="Speech recognition backend. auto uses MLX on Apple silicon, Faster-Whisper elsewhere.",
         )
         p.add_argument("--faster-whisper-model", default="large-v3")
-        p.add_argument("--mlx-whisper-model", default="mlx-community/whisper-large-v3-turbo")
+        p.add_argument("--mlx-whisper-model", default="mlx-community/whisper-large-v3-mlx")
         p.add_argument("--faster-whisper-device", default="auto", help="auto, cpu, or cuda")
         p.add_argument("--faster-whisper-compute-type", default="auto")
         p.add_argument(
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         p.add_argument("--ollama-url", default="http://127.0.0.1:11434")
         p.add_argument("--ollama-model", default="qwen3:4b")
-        p.add_argument("--llm-model", default="mlx-community/Qwen3-4B-Instruct-2507-4bit")
+        p.add_argument("--llm-model", default="mlx-community/Qwen3-8B-4bit")
         p.add_argument(
             "--tts",
             choices=["auto", "chatterbox", "kokoro", "macos", "piper", "elevenlabs"],
@@ -68,7 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--speaker-threshold", type=float, default=0.0)
         p.add_argument("--no-characters", action="store_true")
         p.add_argument("--no-resume", action="store_true")
-        p.add_argument("--review-before-dub", action="store_true", help="Automatically review priority cues with larger local models, then pause for subtitle approval before voices")
+        p.add_argument("--no-auto-review", action="store_false", dest="review_before_dub",
+                       help="Skip automatic subtitle quality review")
+        p.add_argument("--review-before-dub", action="store_true", dest="review_before_dub",
+                       help="Run automatic subtitle quality review (the default)")
         p.add_argument("--review-model", default="mlx-community/Qwen3-8B-4bit")
         p.add_argument("--force", action="store_true")
         p.add_argument("--ducking", action="store_true")
