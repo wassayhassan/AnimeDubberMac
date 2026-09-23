@@ -99,18 +99,25 @@ class FfmpegPipelineTests(unittest.TestCase):
             cfg = Config(source="x", output_dir=d, tts_engine="chatterbox", multi_character=True,
                          chatterbox_reference_audio="/global-female.wav")
             seg = Segment(0, 1, "你好", "Hello", speaker_id="CHAR_001")
+            reference = d / "character.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=330:duration=6",
+                "-ac", "1", "-ar", "16000", str(reference),
+            ], check=True)
             with patch("anime_dubber.providers.tts.synthesize_chatterbox",
                        side_effect=lambda _text, path, **_kw: shutil.copyfile(raw, path)) as clone:
                 prepare_tts_clip(seg, 0, d / "tts", cfg, CommandRunner(), lambda _m: None,
-                                 profile={"id": "CHAR_001", "suggested_reference_audio": "/character.wav"})
-            self.assertEqual(clone.call_args.kwargs["reference_audio"], "/character.wav")
+                                 profile={"id": "CHAR_001", "suggested_reference_audio": str(reference)})
+            self.assertEqual(clone.call_args.kwargs["reference_audio"], str(reference))
 
             seg.speaker_id = "CHAR_002"
             with patch("anime_dubber.providers.tts.kokoro_available", return_value=True), \
                  patch("anime_dubber.providers.tts.synthesize_kokoro",
                        side_effect=lambda _text, path, **_kw: shutil.copyfile(raw, path)) as preset:
                 prepare_tts_clip(seg, 1, d / "tts", cfg, CommandRunner(), lambda _m: None,
-                                 profile={"id": "CHAR_002", "voice_class": "female", "age_group": "child"})
+                                 profile={"id": "CHAR_002", "suggested_reference_audio": str(raw),
+                                          "voice_class": "female", "age_group": "child"})
             self.assertEqual(preset.call_args.kwargs["voice"], "af_heart")
 
 

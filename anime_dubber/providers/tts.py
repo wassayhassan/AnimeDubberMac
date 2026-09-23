@@ -14,6 +14,33 @@ from typing import Callable, Optional
 _MODEL_LOCK = threading.RLock()
 _CHATTERBOX_MODELS: dict[tuple[str, bool], object] = {}
 _KOKORO_PIPELINES: dict[str, object] = {}
+MIN_CHATTERBOX_REFERENCE_SECONDS = 5.25  # Chatterbox requires strictly more than five seconds.
+
+
+def reference_audio_duration(path: str | Path) -> float:
+    """Measure a reference before loading Chatterbox; supports WAV and common compressed formats."""
+    path = Path(path).expanduser()
+    if not path.is_file():
+        return 0.0
+    try:
+        import soundfile as sf
+        info = sf.info(str(path))
+        if info.frames > 0 and info.samplerate > 0:
+            return info.frames / info.samplerate
+    except (OSError, RuntimeError, ImportError, ValueError):
+        pass
+    if shutil.which("ffprobe"):
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode == 0:
+            try:
+                return float(result.stdout.strip())
+            except ValueError:
+                pass
+    return 0.0
 
 
 def _module_available(name: str) -> bool:
@@ -255,16 +282,23 @@ def synthesize_chatterbox(
     if cancel_check:
         cancel_check()
 
-    import torchaudio as ta
-
-    resolved_device = _best_torch_device(device)
-    model = _load_chatterbox(resolved_device, turbo)
     ref = str(reference_audio or "").strip()
     if ref:
         ref_path = Path(ref).expanduser().resolve()
         if not ref_path.exists():
             raise RuntimeError(f"Chatterbox reference clip does not exist: {ref_path}")
+        duration = reference_audio_duration(ref_path)
+        if duration < MIN_CHATTERBOX_REFERENCE_SECONDS:
+            raise RuntimeError(
+                f"Chatterbox needs more than 5 seconds of reference speech; "
+                f"{ref_path.name} is {duration:.2f}s. Choose a longer clip."
+            )
         ref = str(ref_path)
+
+    import torchaudio as ta
+
+    resolved_device = _best_torch_device(device)
+    model = _load_chatterbox(resolved_device, turbo)
 
     exaggeration = max(0.0, min(1.5, float(expressiveness)))
     kwargs = {"exaggeration": exaggeration}

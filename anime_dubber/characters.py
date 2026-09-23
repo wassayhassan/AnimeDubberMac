@@ -557,6 +557,7 @@ def _choose_voice_references(
     voice. No clip is accepted solely because a speaker label exists.
     """
     import soundfile as sf
+    from .providers.tts import MIN_CHATTERBOX_REFERENCE_SECONDS
 
     folder = work_dir / "voice_references"
     folder.mkdir(parents=True, exist_ok=True)
@@ -602,14 +603,15 @@ def _choose_voice_references(
                     break
                 chosen.append((score, start, start + length))
                 total += length
-                if total >= 8.0 or len(chosen) >= 4:
+                if total >= 8.0 or len(chosen) >= 6:
                     break
 
             profile.suggested_reference_audio = ""
             profile.reference_quality = 0.0
             profile.reference_timing = []
-            if total < 2.5 or not chosen:
-                progress(f"No clean source voice reference for {profile.display_name}; using its selected voice")
+            if total < MIN_CHATTERBOX_REFERENCE_SECONDS or not chosen:
+                progress(f"Less than {MIN_CHATTERBOX_REFERENCE_SECONDS:.2f}s of clean speech for "
+                         f"{profile.display_name}; using its selected voice")
                 continue
 
             parts = []
@@ -679,13 +681,13 @@ def analyze_characters(
                     s.style = lab.get("style", "normal")
                     s.style_confidence = float(lab.get("style_confidence", 0.0))
                 _apply_manual_overrides(profiles, override_path)
-                if make_voice_references and (old.get("reference_version") != 1 or any(
+                if make_voice_references and (old.get("reference_version") != 2 or any(
                     p.suggested_reference_audio and not Path(p.suggested_reference_audio).is_file()
                     for p in profiles
                 )):
                     analysis_wav = ensure_analysis_wav(vocals, work_dir, runner, resume=resume, force=force)
                     _choose_voice_references(analysis_wav, segments, profiles, work_dir, runner, progress)
-                    old["reference_version"] = 1
+                    old["reference_version"] = 2
                     old["characters"] = [p.to_dict() for p in profiles]
                     _write_json(cache, old)
                 else:
@@ -823,7 +825,7 @@ def analyze_characters(
     if make_voice_references:
         _choose_voice_references(analysis_wav, segments, profiles, work_dir, runner, progress,
                                  features=feats, embeddings=embeds)
-        payload["reference_version"] = 1
+        payload["reference_version"] = 2
         payload["characters"] = [p.to_dict() for p in profiles]
         _write_json(cache, payload)
     save_series_profiles(profiles, db_path)
