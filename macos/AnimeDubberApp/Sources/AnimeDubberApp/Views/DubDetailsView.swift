@@ -215,6 +215,9 @@ struct DubDetailsView: View {
                 .onChange(of: dub.artifacts["review_report"]) { _, _ in
                     if let updated = self.dub { loadReview(updated) }
                 }
+                .onChange(of: dub.updatedAt) { _, _ in
+                    if let updated = self.dub, updated.status == "paused" { loadReview(updated) }
+                }
                 .onDisappear { player?.pause() }
             } else {
                 ContentUnavailableView("Dub Not Found", systemImage: "waveform", description: Text("Select a dub in the sidebar."))
@@ -265,8 +268,8 @@ struct DubDetailsView: View {
             }
             return
         }
-        let selected = Set(priority)
         let timing = report["timing_issues"] as? [String: [String: Any]] ?? [:]
+        let selected = Set(priority).union(timing.keys.compactMap(Int.init))
         reviewMessage = report["review_error"] as? String ?? ""
         reviewCues = flags.compactMap { row in
             guard let cue = row["cue"] as? Int, selected.contains(cue) else { return nil }
