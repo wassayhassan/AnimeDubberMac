@@ -110,6 +110,22 @@ struct NewDubView: View {
                     Toggle("Detect separate speakers", isOn: $state.detectCharacters)
                 }
 
+                if state.outputMode == .dub {
+                    Divider()
+                    settingRow("Subtitle review") {
+                        Toggle("Review flagged lines before voices", isOn: $state.reviewBeforeDub)
+                    }
+                    if state.reviewBeforeDub {
+                        Text("After subtitles are saved, larger local models check priority lines. The dub pauses so you can inspect their suggestions in Dub Details and approve or edit them. This downloads models on first use and adds processing time.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if state.translationProvider == .whisper {
+                            Text("Choose Local LLM or Ollama translation for line-aligned review.")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                }
+
                 if state.detectCharacters && state.outputMode == .dub && state.targetLanguage == "en" &&
                     (state.voiceProvider == .chatterbox || state.voiceProvider == .auto) {
                     settingRow("Source voices") {
@@ -230,7 +246,7 @@ struct NewDubView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!state.canStartJob || (state.targetLanguage != "en" &&
+            .disabled(!state.canStartJob || (state.reviewBeforeDub && state.outputMode == .dub && state.translationProvider == .whisper) || (state.targetLanguage != "en" &&
                 (state.translationProvider == .whisper || (state.outputMode == .dub && state.voiceProvider != .elevenlabs))))
         }
     }

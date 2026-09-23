@@ -8,6 +8,18 @@ struct DubDetailsView: View {
     @State private var confirmDelete = false
     @State private var advancedExpanded = false
     @State private var voiceAssignments: [String] = []
+    @State private var reviewCues: [ReviewCue] = []
+    @State private var reviewDraft: [Int: String] = [:]
+    @State private var reviewMessage = ""
+
+    private struct ReviewCue: Identifiable {
+        let id: Int
+        let source: String
+        let translation: String
+        let suggestion: String
+        let alternate: String
+        let reasons: [String]
+    }
 
     private var dub: DubSummary? { state.currentProject?.dubs.first { $0.id == dubID } }
 
@@ -64,6 +76,57 @@ struct DubDetailsView: View {
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    if dub.status == "paused" && dub.error == "Subtitle review required before voice generation" {
+                        GroupBox("Review Subtitles Before Dubbing") {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Larger models checked the priority lines. Compare the original, current translation, and proposed wording. Editing here changes the subtitle and the voice generated for that cue.")
+                                    .foregroundStyle(.secondary)
+                                if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
+                                ForEach(reviewCues) { cue in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Cue \(cue.id) · \(cue.reasons.joined(separator: ", ").replacingOccurrences(of: "_", with: " "))")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        Text(cue.source).textSelection(.enabled)
+                                        Text("Current: \(cue.translation)").font(.callout)
+                                        if !cue.alternate.isEmpty {
+                                            Text("Alternate transcription (unverified): \(cue.alternate)")
+                                                .font(.caption).foregroundStyle(.orange)
+                                        }
+                                        TextField("Approved translation", text: Binding(
+                                            get: { reviewDraft[cue.id] ?? cue.translation },
+                                            set: { reviewDraft[cue.id] = $0 }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                        HStack {
+                                            if !cue.suggestion.isEmpty {
+                                                Text("Suggestion: \(cue.suggestion)").textSelection(.enabled)
+                                                Button("Use suggestion") {
+                                                    reviewDraft[cue.id] = cue.suggestion
+                                                }.buttonStyle(.link)
+                                            }
+                                            Spacer()
+                                            Button("Use original") { reviewDraft[cue.id] = cue.translation }
+                                                .buttonStyle(.link)
+                                        }.font(.caption)
+                                    }
+                                    Divider()
+                                }
+                                Button("Approve and Continue Dub", systemImage: "checkmark.circle") {
+                                    let revisions = Dictionary(uniqueKeysWithValues: reviewCues.compactMap { cue -> (String, String)? in
+                                        let value = (reviewDraft[cue.id] ?? cue.translation).trimmingCharacters(in: .whitespacesAndNewlines)
+                                        return value != cue.translation && !value.isEmpty ? (String(cue.id), value) : nil
+                                    })
+                                    if reviewCues.contains(where: { (reviewDraft[$0.id] ?? $0.translation).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                                        reviewMessage = "An approved line cannot be empty."
+                                    } else {
+                                        state.approveReview(dub, revisions: revisions)
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(state.activeJobID != nil || reviewCues.isEmpty)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                     GroupBox("Files") {
                         VStack(alignment: .leading, spacing: 12) {
                             if dub.artifacts.isEmpty {
@@ -103,7 +166,8 @@ struct DubDetailsView: View {
                         }
                     }
                     HStack {
-                        if ["paused", "failed", "cancelled"].contains(dub.status) ||
+                        if (["paused", "failed", "cancelled"].contains(dub.status) &&
+                            dub.error != "Subtitle review required before voice generation") ||
                             (dub.status == "running" && state.activeJobID == nil) {
                             Button("Resume This Dub", systemImage: "play.fill") {
                                 state.resumeDub(dub)
@@ -127,13 +191,16 @@ struct DubDetailsView: View {
                 } message: {
                     Text("This removes this dub's version folder. Shared source media and other dubs stay in the project.")
                 }
-                .onAppear { loadPlayer(dub) }
-                .onChange(of: dubID) { _, _ in loadPlayer(dub) }
+                .onAppear { loadPlayer(dub); loadReview(dub) }
+                .onChange(of: dubID) { _, _ in loadPlayer(dub); loadReview(dub) }
                 .onChange(of: dub.artifacts["dubbed_video"]) { _, _ in
                     if let updated = self.dub { loadPlayer(updated) }
                 }
                 .onChange(of: dub.artifacts["character_map"]) { _, _ in
                     if let updated = self.dub { loadVoiceAssignments(updated) }
+                }
+                .onChange(of: dub.artifacts["review_report"]) { _, _ in
+                    if let updated = self.dub { loadReview(updated) }
                 }
                 .onDisappear { player?.pause() }
             } else {
@@ -169,6 +236,33 @@ struct DubDetailsView: View {
             let source = reference.isEmpty ? "" : " · \(URL(fileURLWithPath: reference).lastPathComponent)"
             return "\(name) · \(provider)\(voice.isEmpty ? "" : " · \(voice)")\(source)"
         }
+    }
+
+    private func loadReview(_ dub: DubSummary) {
+        reviewCues = []
+        reviewDraft = [:]
+        reviewMessage = ""
+        guard let path = dub.artifacts["review_report"],
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let report = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let flags = report["flags"] as? [[String: Any]],
+              let priority = report["priority_cues"] as? [Int] else {
+            if dub.error == "Subtitle review required before voice generation" {
+                reviewMessage = "The review report could not be loaded. Open the report in Files to inspect it."
+            }
+            return
+        }
+        let selected = Set(priority)
+        reviewMessage = report["review_error"] as? String ?? ""
+        reviewCues = flags.compactMap { row in
+            guard let cue = row["cue"] as? Int, selected.contains(cue) else { return nil }
+            return ReviewCue(id: cue, source: row["source"] as? String ?? "",
+                             translation: row["translation"] as? String ?? "",
+                             suggestion: row["suggestion"] as? String ?? "",
+                             alternate: row["asr_candidate"] as? String ?? "",
+                             reasons: row["reasons"] as? [String] ?? [])
+        }
+        for cue in reviewCues { reviewDraft[cue.id] = cue.translation }
     }
 
     private func value(_ config: [String: Any], _ key: String) -> String {

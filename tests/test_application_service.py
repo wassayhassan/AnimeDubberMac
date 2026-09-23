@@ -2,13 +2,37 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import json
+import tempfile
 from unittest.mock import patch
 
 from anime_dubber.application.events import progress_to_event
 from anime_dubber.application.service import ApplicationService, config_from_dict
+from anime_dubber.application.project import ProjectStore
+from anime_dubber.core import ReviewRequired
 
 
 class ApplicationServiceTests(unittest.TestCase):
+    def test_review_checkpoint_is_paused_and_approval_is_scoped_to_its_dub(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = ApplicationService()
+            source = "source.mp4"
+            store = ProjectStore(Path(temp), source)
+            project = store.create(source=source, name="Episode")
+            with patch("anime_dubber.application.service.run_pipeline", side_effect=ReviewRequired("Subtitle review required before voice generation")):
+                result = service.run_sync({"source": source, "output_dir": temp, "review_before_dub": True})
+            self.assertEqual(result["status"], "paused")
+            dub = service.get_project(temp, project["project_id"])["dubs"][0]
+            report = Path(temp) / "versions" / dub["id"] / "source_en.review.json"
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps({"signature": "signed", "priority_cues": [1]}))
+            store.publish_artifact("review_report", str(report), dub_id=dub["id"], version_id=dub["id"])
+            approved = service.approve_review(temp, project["project_id"], dub["id"], {"1": "Approved text"})
+            self.assertEqual(approved["revisions"], 1)
+            self.assertEqual(json.loads(Path(approved["path"]).read_text())["revisions"], {"1": "Approved text"})
+            with self.assertRaises(ValueError):
+                service.approve_review(temp, project["project_id"], dub["id"], {"2": "Unrelated cue"})
+
     def test_config_accepts_nested_v4_schema(self):
         cfg = config_from_dict({
             "source": "video.mp4",

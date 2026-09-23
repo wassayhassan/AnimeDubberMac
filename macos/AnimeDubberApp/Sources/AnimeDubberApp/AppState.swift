@@ -41,6 +41,7 @@ final class AppState: ObservableObject {
 
     @Published var detectCharacters = true
     @Published var resumeCachedWork = true
+    @Published var reviewBeforeDub = false
     @Published var speakerBackend = "auto"
     @Published var maxSpeakers = 12
     @Published var speakerThreshold = 0.0
@@ -57,6 +58,7 @@ final class AppState: ObservableObject {
     @Published var progressFraction: Double?
     @Published var activeJobID: String?
     private var analyzingCurrentJob = false
+    private var openPendingReview = false
     @Published var systemCheckItems: [SystemCheckItem] = []
     @Published var showingSystemCheck = false
 
@@ -119,6 +121,7 @@ final class AppState: ObservableObject {
             elevenLabsVoiceID: elevenLabsVoiceID,
             detectCharacters: detectCharacters,
             resumeCachedWork: resumeCachedWork,
+            reviewBeforeDub: reviewBeforeDub,
             speakerBackend: speakerBackend,
             maxSpeakers: maxSpeakers,
             speakerThreshold: speakerThreshold,
@@ -155,6 +158,7 @@ final class AppState: ObservableObject {
             elevenLabsVoiceID: elevenLabsVoiceID,
             detectCharacters: detectCharacters,
             resumeCachedWork: resumeCachedWork,
+            reviewBeforeDub: reviewBeforeDub,
             speakerBackend: speakerBackend,
             maxSpeakers: maxSpeakers,
             speakerThreshold: speakerThreshold,
@@ -207,6 +211,7 @@ final class AppState: ObservableObject {
         elevenLabsVoiceID = preferences.elevenLabsVoiceID
         detectCharacters = preferences.detectCharacters
         resumeCachedWork = preferences.resumeCachedWork
+        reviewBeforeDub = preferences.reviewBeforeDub ?? false
         speakerBackend = preferences.speakerBackend
         maxSpeakers = preferences.maxSpeakers
         speakerThreshold = preferences.speakerThreshold
@@ -315,6 +320,7 @@ final class AppState: ObservableObject {
             ],
             "context": seriesContext,
             "resume": resumeCachedWork,
+            "review_before_dub": reviewBeforeDub,
         ]
 
         do {
@@ -362,6 +368,19 @@ final class AppState: ObservableObject {
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    func approveReview(_ dub: DubSummary, revisions: [String: String]) {
+        guard let project = currentProject, activeJobID == nil else { return }
+        do {
+            _ = try backend.send(method: "approve_review", params: [
+                "output_dir": project.outputDir,
+                "project_id": project.id,
+                "dub_id": dub.id,
+                "revisions": revisions,
+            ], id: "approve-review-\(dub.id)-\(UUID().uuidString)")
+            statusText = "Saving subtitle review…"
+        } catch { statusText = error.localizedDescription }
     }
 
     func refreshProjects() {
@@ -447,6 +466,7 @@ final class AppState: ObservableObject {
         backgroundVolume = (config["background_volume"] as? NSNumber)?.doubleValue ?? backgroundVolume
         dubVolume = (config["dub_volume"] as? NSNumber)?.doubleValue ?? dubVolume
         backgroundDucking = config["ducking"] as? Bool ?? backgroundDucking
+        reviewBeforeDub = config["review_before_dub"] as? Bool ?? false
         selection = .newDub
     }
 
@@ -701,9 +721,21 @@ final class AppState: ObservableObject {
             } else if id.hasPrefix("projects-") {
                 let rows = resultAny as? [[String: Any]] ?? []
                 projects = rows.compactMap(ProjectSummary.init(dictionary:))
+                if openPendingReview {
+                    if let waiting = currentProject?.dubs.first(where: { $0.status == "paused" && $0.error == "Subtitle review required before voice generation" }) {
+                        selection = .dub(waiting.id)
+                        statusText = "Review subtitles before dubbing"
+                    }
+                    openPendingReview = false
+                }
                 if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
                     self.selectedProjectID = nil
                     selection = .projects
+                }
+            } else if id.hasPrefix("approve-review-") {
+                let suffix = id.dropFirst("approve-review-".count)
+                if let dub = currentProject?.dubs.first(where: { suffix.hasPrefix($0.id + "-") }) {
+                    resumeDub(dub)
                 }
             } else if id.hasPrefix("create-project-") {
                 selectedProjectID = result["project_id"] as? String
@@ -788,6 +820,7 @@ final class AppState: ObservableObject {
 
         case "finished":
             let status = data["status"] as? String ?? "completed"
+            openPendingReview = status == "paused"
             let showVoices = analyzingCurrentJob && status == "completed"
             analyzingCurrentJob = false
             activeJobID = nil

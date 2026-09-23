@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from .core import DEFAULT_CONTEXT, DEFAULT_GLOSSARY, _atomic_json_write, glossary_string, parse_translation_response
 
@@ -68,6 +68,28 @@ def flags_for(source: dict, target: dict, language: str = "en") -> list[str]:
     return reasons
 
 
+def approved_revisions(path: Path, report: dict, cue_count: int) -> dict[int, str] | None:
+    """Return approved cue edits, or None when review still needs a decision."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("signature") != report["signature"]:
+            return None
+        revisions = data["revisions"]
+        if not isinstance(revisions, dict):
+            raise ValueError("Invalid review revisions")
+        approved = {}
+        for key, value in revisions.items():
+            idx = int(key) - 1
+            if idx < 0 or idx >= cue_count or not isinstance(value, str) or not value.strip():
+                raise ValueError("Review decision contains an invalid cue or empty text")
+            approved[idx] = value.strip()
+        return approved
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise ValueError(f"Invalid subtitle review approval: {exc}") from exc
+
+
 def review_subtitles(
     source_path: Path,
     target_path: Path,
@@ -75,6 +97,8 @@ def review_subtitles(
     *,
     language: str = "en",
     model: str = "",
+    context: str = DEFAULT_CONTEXT,
+    glossary: Mapping[str, str] | None = None,
     audio: Path | None = None,
     asr_model: str = "mlx-community/whisper-large-v3-mlx",
     max_lines: int = 0,
@@ -87,6 +111,7 @@ def review_subtitles(
     requesting the same expensive review. The original SRT is never modified.
     """
     started = time.monotonic()
+    glossary = dict(DEFAULT_GLOSSARY if glossary is None else glossary)
     source, target = read_srt(source_path), read_srt(target_path)
     if len(source) != len(target):
         raise ValueError("The source and translated SRT have different cue counts; review needs aligned cues.")
@@ -101,6 +126,7 @@ def review_subtitles(
     signature_asr_model = asr_model if audio else previous.get("asr_model") if isinstance(previous, dict) else None
     signature = hashlib.sha256(json.dumps({
         "source": source, "target": target, "language": language, "model": signature_model,
+        "context": context, "glossary": glossary,
         "audio": audio_identity,
         "asr_model": signature_asr_model,
     }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -127,7 +153,8 @@ def review_subtitles(
               "translation_file": str(target_path), "review_model": signature_model or None,
               "audio_identity": audio_identity, "asr_model": signature_asr_model,
               "total_cues": len(source), "flagged_cues": len(flagged),
-              "sampled_cues": len(selected), "flags": flagged,
+              "sampled_cues": len(selected), "priority_cues": [row["cue"] for row in selected],
+              "flags": flagged,
               "timing_seconds": {}}
     report_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_json_write(report_path, result)
@@ -163,7 +190,7 @@ def review_subtitles(
             llm, tokenizer = load(model)
             result["timing_seconds"]["model_load"] = round(time.monotonic() - load_start, 2)
             generation_start = time.monotonic()
-            glossary = glossary_string(DEFAULT_GLOSSARY)
+            glossary_text = glossary_string(glossary)
             for n, row in enumerate(pending, 1):
                 idx = row["cue"] - 1
                 neighbors = [{"source": source[j]["text"], "translation": target[j]["text"]}
@@ -172,7 +199,7 @@ def review_subtitles(
                     f"Check this {language} subtitle against its Chinese source. Suggest a short, natural translation "
                     "that fits the timing. Do not invent missing source speech. Return ONLY a JSON array "
                     f"with one object: {{\"id\": {row['cue']}, \"text\": \"suggestion\"}}.\n"
-                    f"Context: {DEFAULT_CONTEXT}\nGlossary: {glossary}\n"
+                    f"Context: {context}\nGlossary: {glossary_text}\n"
                     f"Neighboring cues: {json.dumps(neighbors, ensure_ascii=False)}\n"
                     f"Source: {row['source']}\n"
                     f"Alternate transcription (unverified): {row.get('asr_candidate', '')}\n"

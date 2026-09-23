@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from . import __version__
 from .application import AppEvent, ApplicationService
+from .core import DEFAULT_CONTEXT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--speaker-threshold", type=float, default=0.0)
         p.add_argument("--no-characters", action="store_true")
         p.add_argument("--no-resume", action="store_true")
+        p.add_argument("--review-before-dub", action="store_true", help="Automatically review priority cues with larger local models, then pause for subtitle approval before voices")
+        p.add_argument("--review-model", default="mlx-community/Qwen3-8B-4bit")
         p.add_argument("--force", action="store_true")
         p.add_argument("--ducking", action="store_true")
         p.add_argument("--background-volume", type=float, default=1.0)
@@ -96,11 +99,19 @@ def build_parser() -> argparse.ArgumentParser:
     retry.add_argument("--elevenlabs-api-key", default="")
     retry.add_argument("--json", action="store_true")
 
+    approve = sub.add_parser("approve-review", help="Approve a paused dub's subtitle review and optionally apply cue edits")
+    approve.add_argument("project_id")
+    approve.add_argument("dub_id")
+    approve.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
+    approve.add_argument("--revisions", type=Path, help="Optional JSON object mapping 1-based cue numbers to approved text")
+
     review = sub.add_parser("review-subtitles", help="Flag suspicious cues in an existing SRT pair and optionally propose fixes with a larger local model")
     review.add_argument("source_srt", type=Path, help="Original-language SRT")
     review.add_argument("translated_srt", type=Path, help="Translated SRT with matching cue numbers")
     review.add_argument("-o", "--report", type=Path, default=None, help="JSON report path (defaults to translated SRT with .review.json suffix)")
     review.add_argument("--target-language", choices=["en", "es", "fr", "de", "ja"], default="en")
+    review.add_argument("--context", default=None, help="Project context for model review")
+    review.add_argument("--glossary-json", default=None, help="JSON object with project translation terms")
     review.add_argument("--model", default="", help="Optional MLX model for flagged cues, e.g. mlx-community/Qwen3-8B-4bit")
     review.add_argument("--audio", type=Path, help="Optional extracted dialogue WAV for a second transcription of suspect source cues")
     review.add_argument("--asr-model", default="mlx-community/whisper-large-v3-mlx")
@@ -148,6 +159,8 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "speaker_threshold": args.speaker_threshold,
         "multi_character": not args.no_characters,
         "resume": not args.no_resume,
+        "review_before_dub": args.review_before_dub,
+        "review_model": args.review_model,
         "force": args.force,
         "ducking": args.ducking,
         "background_volume": args.background_volume,
@@ -223,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
             report_path = args.report or args.translated_srt.with_suffix(".review.json")
             report = review_subtitles(args.source_srt, args.translated_srt, report_path,
                                       language=args.target_language, model=args.model,
+                                      context=args.context or DEFAULT_CONTEXT,
+                                      glossary=json.loads(args.glossary_json) if args.glossary_json else None,
                                       audio=args.audio, asr_model=args.asr_model,
                                       max_lines=args.max_lines, sample_seconds=args.sample_seconds,
                                       progress=lambda msg: print(msg, file=sys.stderr))
@@ -234,6 +249,14 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("Interrupted. Completed review suggestions are saved.", file=sys.stderr)
             return 130
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "approve-review":
+        try:
+            revisions = json.loads(args.revisions.read_text(encoding="utf-8")) if args.revisions else {}
+            print(json.dumps(service.approve_review(args.output, args.project_id, args.dub_id, revisions), indent=2))
+            return 0
         except Exception as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
@@ -273,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(job, indent=2))
     else:
         print()
-        print("Completed.")
+        print("Completed." if job["status"] == "completed" else f"{job['status'].capitalize()}: {job.get('error') or 'Review required'}")
         for name, path in job.get("result", {}).items():
             print(f"{name}: {path}")
     return 0
