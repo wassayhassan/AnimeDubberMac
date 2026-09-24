@@ -149,7 +149,7 @@ private struct CharacterInspector: View {
     private let engines = [
         ("inherit", "App Default"),
         ("auto", "Automatic · Best Local"),
-        ("chatterbox", "Chatterbox Turbo"),
+        ("chatterbox", "Chatterbox Voice Clone"),
         ("kokoro", "Kokoro"),
         ("elevenlabs", "ElevenLabs"),
         ("macos", "macOS Voice"),

@@ -145,6 +145,7 @@ class Config:
     chatterbox_expressiveness: float = 0.5
     chatterbox_device: str = "auto"  # auto|mps|cuda|cpu
     chatterbox_turbo: bool = True
+    prefer_american_accent: bool = True
     kokoro_voice: str = "auto"
     kokoro_language: str = "a"
     piper_model: str = ""
@@ -1367,6 +1368,9 @@ def prepare_tts_clip(
         resolved_tts = _character_voice_fallback()
         progress(f"No source voice reference for {seg.speaker_id}; using {resolved_tts} character voice")
 
+    american_english = (config.prefer_american_accent and config.target_language == "en"
+                        and config.source_language != "en" and bool(chatterbox_reference))
+
     if resolved_tts == "kokoro" and (not kokoro_voice or kokoro_voice == "auto"):
         from .providers.tts import automatic_kokoro_voice
         kokoro_voice = automatic_kokoro_voice(profile)
@@ -1401,6 +1405,7 @@ def prepare_tts_clip(
         signature_data["expressiveness"] = round(chatterbox_expressiveness, 3)
         signature_data["device"] = config.chatterbox_device
         signature_data["turbo"] = bool(config.chatterbox_turbo)
+        signature_data["american_english"] = american_english
     elif resolved_tts == "kokoro":
         signature_data["kokoro_voice"] = kokoro_voice
         signature_data["kokoro_language"] = config.kokoro_language
@@ -1442,6 +1447,7 @@ def prepare_tts_clip(
                 expressiveness=chatterbox_expressiveness,
                 device=config.chatterbox_device,
                 turbo=bool(config.chatterbox_turbo),
+                american_english=american_english,
                 cancel_check=runner.check_cancel,
             )
         except Exception as e:

@@ -35,7 +35,7 @@ Phase 6 now includes:
 - persistent macOS app preferences;
 - ElevenLabs API key stored in macOS Keychain;
 - local `.app` packaging and installation;
-- Chatterbox Turbo as the preferred high-quality local voice engine;
+- Chatterbox voice cloning as the preferred local voice engine (Standard with accent mitigation for Chinese references dubbed into English, Turbo otherwise);
 - Kokoro as the fast lightweight local voice engine;
 - optional per-character voice engine, reference clip, expressiveness, and Kokoro preset overrides;
 - automatic voice priority: Chatterbox → Kokoro → platform fallback;
@@ -104,7 +104,7 @@ The native Settings window now controls:
 
 - ASR provider: Automatic / MLX Whisper / Faster-Whisper
 - translation: Automatic / local MLX LLM / Ollama / Whisper direct
-- TTS: Automatic / Chatterbox Turbo / Kokoro / ElevenLabs / macOS / Piper
+- TTS: Automatic / Chatterbox Voice Clone / Kokoro / ElevenLabs / macOS / Piper
 - Faster-Whisper model, device, and compute type
 - Ollama URL and model
 - Chatterbox device, Turbo mode, expressiveness, and optional reference clip
@@ -126,7 +126,7 @@ Install the optional premium local voice engines into AnimeDubber's existing env
 
 That installer adds:
 
-- **Chatterbox Turbo** for the highest-quality local English character speech and optional zero-shot voice cloning;
+- **Chatterbox** for English character speech and optional zero-shot voice cloning; Chinese references use the Standard model with CFG weight zero to reduce source accent transfer into English (at a speed cost);
 - **Kokoro** for much faster lightweight local speech;
 - `espeak-ng`, which Kokoro uses for English text processing.
 
@@ -143,6 +143,8 @@ macOS / Piper / ElevenLabs fallback
 ```
 
 When English dubbing uses Chatterbox and speaker detection is enabled, **Choose character voice clips automatically** combines at least 5.25 seconds of isolated source dialogue for each character. Run **Analyze Characters** first to listen to each chosen clip in **Characters → English Voice** and replace or disable a bad match before generating the dub. A character without enough clean speech uses a Kokoro or macOS character voice. A manually chosen character reference takes priority, followed by the global Chatterbox reference, then the automatic clip. References shorter than 5.25 seconds fall back to a character voice instead of stopping the dub. The selected clips and timestamps remain in the project work folder and character map for later review and resume. Use `--no-auto-source-voices` to disable this from the CLI.
+
+English dubs default to reducing accent transfer from Chinese source clips. This keeps the source speaker as a reference but cannot guarantee a US accent or identical voice identity. It uses Chatterbox Standard even if Turbo is selected and can run slower. For an American preset voice, choose Kokoro for that character; this does not clone the original voice. CLI users can pass `--preserve-source-accent` to disable accent mitigation.
 
 ## CLI
 

@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--chatterbox-expressiveness", type=float, default=0.5)
         p.add_argument("--chatterbox-device", choices=["auto", "mps", "cuda", "cpu"], default="auto")
         p.add_argument("--chatterbox-standard", action="store_true", help="Use standard Chatterbox instead of Turbo")
+        p.add_argument("--preserve-source-accent", action="store_true",
+                       help="Disable accent-transfer mitigation when cloning a non-English voice into English")
         p.add_argument("--kokoro-voice", default="auto", help="Kokoro voice preset, e.g. af_heart or am_adam")
         p.add_argument("--piper-model", default="", help="Path to a Piper .onnx voice model")
         p.add_argument("--piper-speaker", type=int, default=-1, help="Optional Piper speaker id for multi-speaker models")
@@ -156,6 +158,7 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
             "chatterbox_expressiveness": args.chatterbox_expressiveness,
             "chatterbox_device": args.chatterbox_device,
             "chatterbox_turbo": not args.chatterbox_standard,
+            "prefer_american_accent": not args.preserve_source_accent,
             "kokoro_voice": args.kokoro_voice,
             "piper_model": args.piper_model,
             "piper_speaker": args.piper_speaker,
@@ -179,6 +182,7 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "chatterbox_expressiveness": args.chatterbox_expressiveness,
         "chatterbox_device": args.chatterbox_device,
         "chatterbox_turbo": not args.chatterbox_standard,
+        "prefer_american_accent": not args.preserve_source_accent,
         "kokoro_voice": args.kokoro_voice,
         "piper_model": args.piper_model,
         "piper_speaker": args.piper_speaker,
