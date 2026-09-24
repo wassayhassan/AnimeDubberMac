@@ -113,7 +113,7 @@ enum VoiceProvider: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .auto: "Automatic · Best Local"
-        case .chatterbox: "Chatterbox Turbo"
+        case .chatterbox: "Chatterbox Voice Clone"
         case .kokoro: "Kokoro · Fast Local"
         case .elevenlabs: "ElevenLabs"
         case .macos: "macOS Voice"

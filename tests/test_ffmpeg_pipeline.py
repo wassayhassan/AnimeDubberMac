@@ -111,6 +111,7 @@ class FfmpegPipelineTests(unittest.TestCase):
                 prepare_tts_clip(seg, 0, d / "tts", cfg, CommandRunner(), lambda _m: None,
                                  profile={"id": "CHAR_001", "suggested_reference_audio": str(reference)})
             self.assertEqual(clone.call_args.kwargs["reference_audio"], str(reference))
+            self.assertTrue(clone.call_args.kwargs["american_english"])
 
             seg.speaker_id = "CHAR_002"
             with patch("anime_dubber.providers.tts.kokoro_available", return_value=True), \

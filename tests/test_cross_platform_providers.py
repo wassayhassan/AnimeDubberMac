@@ -5,7 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from anime_dubber.application.service import config_from_dict
 from anime_dubber.cli import build_parser
@@ -15,11 +15,42 @@ from anime_dubber.providers.translation import ollama_generate
 from anime_dubber.providers.tts import (
     _prepare_chatterbox_watermarker,
     automatic_kokoro_voice,
+    synthesize_chatterbox,
     synthesize_piper,
 )
 
 
 class CrossPlatformProviderTests(unittest.TestCase):
+    def test_chinese_reference_prefers_standard_model_for_american_english(self):
+        class FakeAudio:
+            def detach(self): return self
+            def cpu(self): return self
+
+        with tempfile.TemporaryDirectory() as td:
+            reference = Path(td) / "reference.wav"
+            reference.write_bytes(b"reference")
+            output = Path(td) / "dub.wav"
+            model = types.SimpleNamespace(sr=24000, generate=Mock(return_value=FakeAudio()))
+            fake_audio = types.SimpleNamespace(save=lambda path, _audio, _rate: Path(path).write_bytes(b"w" * 60))
+            with patch.dict("sys.modules", {"torchaudio": fake_audio}), \
+                 patch("anime_dubber.providers.tts.chatterbox_available", return_value=True), \
+                 patch("anime_dubber.providers.tts.reference_audio_duration", return_value=7.0), \
+                 patch("anime_dubber.providers.tts._best_torch_device", return_value="cpu"), \
+                 patch("anime_dubber.providers.tts._load_chatterbox", return_value=model) as load:
+                synthesize_chatterbox("Hello", output, reference_audio=str(reference),
+                                      turbo=True, american_english=True)
+                load.assert_called_once_with("cpu", False)
+                self.assertEqual(model.generate.call_args.kwargs["cfg_weight"], 0.0)
+                self.assertEqual(model.generate.call_args.kwargs["audio_prompt_path"], str(reference))
+                self.assertTrue(output.is_file())
+
+                load.reset_mock()
+                model.generate.reset_mock()
+                synthesize_chatterbox("Hello", output, reference_audio=str(reference),
+                                      turbo=True, american_english=False)
+                load.assert_called_once_with("cpu", True)
+                self.assertNotIn("cfg_weight", model.generate.call_args.kwargs)
+
     def test_mlx_model_selections_are_regular_job_settings(self):
         cfg = config_from_dict({
             "source": "input.mp4", "output_dir": "./out",
@@ -78,7 +109,14 @@ class CrossPlatformProviderTests(unittest.TestCase):
         self.assertAlmostEqual(cfg.chatterbox_expressiveness, 0.8)
         self.assertEqual(cfg.chatterbox_device, "mps")
         self.assertTrue(cfg.chatterbox_turbo)
+        self.assertTrue(cfg.prefer_american_accent)
         self.assertEqual(cfg.kokoro_voice, "af_bella")
+
+        original = config_from_dict({
+            "source": "input.mp4", "output_dir": "./out",
+            "tts": {"prefer_american_accent": False},
+        })
+        self.assertFalse(original.prefer_american_accent)
 
     def test_chatterbox_perth_none_falls_back_to_dummy_watermarker(self):
         class DummyWatermarker:
@@ -147,6 +185,9 @@ class CrossPlatformProviderTests(unittest.TestCase):
         self.assertEqual(premium.chatterbox_reference, "hero.wav")
         self.assertAlmostEqual(premium.chatterbox_expressiveness, 0.7)
         self.assertEqual(premium.chatterbox_device, "mps")
+        self.assertFalse(premium.preserve_source_accent)
+        preserve = build_parser().parse_args(["run", "input.mp4", "--preserve-source-accent"])
+        self.assertTrue(preserve.preserve_source_accent)
 
         kokoro = build_parser().parse_args([
             "run", "input.mp4",

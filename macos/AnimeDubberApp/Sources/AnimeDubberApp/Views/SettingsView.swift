@@ -178,7 +178,7 @@ struct SettingsView: View {
                 }
 
                 if state.voiceProvider == .auto {
-                    Text("Automatic prefers Chatterbox Turbo, then Kokoro, then macOS/Piper/ElevenLabs fallbacks depending on what is installed.")
+                    Text("Automatic prefers Chatterbox voice cloning, then Kokoro and other installed voices. Chinese-to-English clones use Chatterbox Standard to reduce accent transfer.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -204,6 +204,9 @@ struct SettingsView: View {
                         }
 
                         Toggle("Use Chatterbox Turbo", isOn: $state.chatterboxTurbo)
+                        Text("English dubs with a Chinese voice reference use Chatterbox Standard with accent mitigation even when Turbo is selected. This can take longer. It may retain some source accent.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         LabeledContent("Expressiveness") {
                             HStack {

@@ -123,6 +123,7 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         chatterbox_turbo=bool(
             tts.get("chatterbox_turbo", data.get("chatterbox_turbo", True))
         ),
+        prefer_american_accent=bool(tts.get("prefer_american_accent", data.get("prefer_american_accent", True))),
         kokoro_voice=str(tts.get("kokoro_voice", data.get("kokoro_voice", "auto")) or "auto"),
         kokoro_language=str(tts.get("kokoro_language", data.get("kokoro_language", "a")) or "a"),
         piper_model=str(tts.get("piper_model", data.get("piper_model", "")) or ""),
@@ -696,6 +697,8 @@ class ApplicationService:
                 expressiveness=float(settings.get("expressiveness") or 0.5),
                 device=str(settings.get("device") or "auto"),
                 turbo=bool(settings.get("turbo", True)),
+                american_english=bool(settings.get("prefer_american_accent", True)
+                                      and settings.get("source_language", "zh") != "en"),
                 cancel_check=runner.check_cancel,
             )
         elif provider == "kokoro":

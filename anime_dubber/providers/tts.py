@@ -266,6 +266,7 @@ def synthesize_chatterbox(
     expressiveness: float = 0.5,
     device: str = "auto",
     turbo: bool = True,
+    american_english: bool = False,
     cancel_check: Callable[[], None] | None = None,
 ) -> None:
     """Generate high-quality English speech with Chatterbox.
@@ -297,11 +298,16 @@ def synthesize_chatterbox(
 
     import torchaudio as ta
 
+    # Turbo does not support CFG. Standard Chatterbox can lower accent transfer
+    # from a non-English reference with CFG=0 while keeping its speaker prompt.
+    use_turbo = turbo and not (american_english and ref)
     resolved_device = _best_torch_device(device)
-    model = _load_chatterbox(resolved_device, turbo)
+    model = _load_chatterbox(resolved_device, use_turbo)
 
     exaggeration = max(0.0, min(1.5, float(expressiveness)))
-    kwargs = {"exaggeration": exaggeration}
+    kwargs = {} if use_turbo else {"exaggeration": exaggeration}
+    if american_english and ref:
+        kwargs["cfg_weight"] = 0.0
     if ref:
         kwargs["audio_prompt_path"] = ref
 
