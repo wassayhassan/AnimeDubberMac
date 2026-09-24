@@ -55,7 +55,7 @@ struct DubDetailsView: View {
                                 HStack {
                                     Button("Retry This Dub", systemImage: "arrow.clockwise") { state.resumeDub(dub) }
                                         .buttonStyle(.borderedProminent)
-                                        .disabled(state.activeJobID != nil)
+                                        .disabled(state.activeJobID != nil || state.jobStartPending)
                                     if (dub.error ?? "").contains("403") {
                                         Button("Choose a Video File") { state.newProject() }
                                     }
@@ -79,11 +79,20 @@ struct DubDetailsView: View {
                             }
                         }
                     } else if dub.status == "completed" {
-                        Text("The rendered video is unavailable at its recorded path.")
-                            .foregroundStyle(.secondary)
+                        GroupBox("Video unavailable") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("The finished video is missing from its saved location.")
+                                    .foregroundStyle(.orange)
+                                Button("Show Project Folder") {
+                                    if let project = state.currentProject {
+                                        NSWorkspace.shared.open(URL(fileURLWithPath: project.outputDir))
+                                    }
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
 
-                    if dub.status == "completed" {
+                    if dub.status == "completed" && player != nil {
                         GroupBox("Result") {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Ready to watch · \(dub.language.uppercased())")
@@ -135,7 +144,7 @@ struct DubDetailsView: View {
                                     state.resumeDub(dub)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(state.activeJobID != nil)
+                                .disabled(state.activeJobID != nil || state.jobStartPending)
                                 if !reviewMessage.isEmpty { Text(reviewMessage).foregroundStyle(.orange) }
                                 DisclosureGroup("Inspect subtitles (advanced)", isExpanded: $reviewExpanded) {
                                 ForEach(reviewCues) { cue in
@@ -279,7 +288,7 @@ struct DubDetailsView: View {
                             Button("Resume This Dub", systemImage: "play.fill") {
                                 state.resumeDub(dub)
                             }
-                            .disabled(state.activeJobID != nil)
+                            .disabled(state.activeJobID != nil || state.jobStartPending)
                         }
                         Button("Regenerate as New Version", systemImage: "arrow.clockwise") {
                             state.regenerate(dub)

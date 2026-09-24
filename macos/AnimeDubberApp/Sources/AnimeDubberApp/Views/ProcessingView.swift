@@ -18,7 +18,8 @@ struct ProcessingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Your dub").font(.largeTitle.bold())
+                Text(state.outputMode == .subtitles ? "Your subtitles" : "Your dub")
+                    .font(.largeTitle.bold())
                 Text(state.source.isEmpty ? "Preparing your video" :
                      (URL(string: state.source)?.scheme == "https" || URL(string: state.source)?.scheme == "http" ?
                       state.source : URL(fileURLWithPath: state.source).lastPathComponent))
@@ -53,7 +54,7 @@ struct ProcessingView: View {
                                 } else {
                                     ProgressView()
                                 }
-                            } else if state.startPending {
+                            } else if state.startPending || state.jobStartPending {
                                 ProgressView()
                             }
                             if !state.downloadDetail.isEmpty && state.currentStage == "downloading" {

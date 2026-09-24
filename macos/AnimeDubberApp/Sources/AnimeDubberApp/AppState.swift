@@ -65,14 +65,17 @@ final class AppState: ObservableObject {
     @Published var jobIssue = ""
     @Published var jobIssueDetail = ""
     @Published var startPending = false
+    @Published var jobStartPending = false
     @Published var activeJobID: String?
     private var pendingQuickStart = false
     private var pendingQuickProjectID: String?
     private var openResultForJobID: String?
     private var openSubtitlesOnFinish = false
     private var subtitlesJobFinished = false
+    private var awaitingDubJob = false
+    private var finishedBeforeStartResponse: Set<String> = []
     private var analyzingCurrentJob = false
-    private var openPendingReview = false
+    private var pendingReviewJobID: String?
     @Published var systemCheckItems: [SystemCheckItem] = []
     @Published var showingSystemCheck = false
     @Published var settingsShowProviders = false
@@ -107,7 +110,7 @@ final class AppState: ObservableObject {
 
     var canStartJob: Bool {
         guard case .ready = backendState else { return false }
-        return currentProject != nil && activeJobID == nil
+        return currentProject != nil && activeJobID == nil && !jobStartPending
     }
 
     var settingsSnapshot: SettingsSnapshot {
@@ -269,6 +272,14 @@ final class AppState: ObservableObject {
                             self.activity.append(ActivityEntry(kind: .error, message: "Backend exited with code \(code)."))
                         }
                         self.activeJobID = nil
+                        self.jobStartPending = false
+                        self.awaitingDubJob = false
+                        self.finishedBeforeStartResponse.removeAll()
+                        if self.startPending {
+                            self.failQuickStart("The processing service stopped while preparing your dub. Reconnect and try again.")
+                        } else if self.statusText != "Completed" {
+                            self.jobIssue = "The processing service stopped. Reconnect and try again."
+                        }
                         self.backendState = .disconnected
                         self.statusText = "Backend offline"
                     }
@@ -295,7 +306,7 @@ final class AppState: ObservableObject {
 
     var canQuickStart: Bool {
         if case .ready = backendState {
-            return activeJobID == nil && !startPending
+            return activeJobID == nil && !startPending && !jobStartPending
         }
         return false
     }
@@ -368,6 +379,9 @@ final class AppState: ObservableObject {
     func startJob(analysis: Bool) {
         guard canStartJob, let project = currentProject else { return }
 
+        jobStartPending = true
+        awaitingDubJob = !analysis && outputMode == .dub
+        openResultForJobID = nil
         savePreferences()
         let threshold: Any = speakerThreshold == 0 ? NSNull() : speakerThreshold
 
@@ -441,9 +455,12 @@ final class AppState: ObservableObject {
             openSubtitlesOnFinish = !analysis && outputMode == .subtitles
             subtitlesJobFinished = false
         } catch {
+            jobStartPending = false
+            awaitingDubJob = false
             activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
             statusText = "Could not start"
             jobIssue = error.localizedDescription
+            if !analysis { selection = .processing }
         }
     }
 
@@ -462,19 +479,27 @@ final class AppState: ObservableObject {
     }
 
     func resumeDub(_ dub: DubSummary) {
-        guard activeJobID == nil, let project = currentProject else { return }
+        guard activeJobID == nil, !jobStartPending, let project = currentProject else { return }
+        jobStartPending = true
+        awaitingDubJob = true
+        openResultForJobID = nil
         do {
             statusText = "Resuming \(dub.title)…"
             progressFraction = nil
-            activityExpanded = true
+            jobIssue = ""
             _ = try backend.send(method: "resume_dub", params: [
                 "output_dir": project.outputDir,
                 "project_id": project.id,
                 "dub_id": dub.id,
                 "elevenlabs_api_key": elevenLabsAPIKey,
             ], id: "resume-\(UUID().uuidString)")
+            selection = .processing
         } catch {
+            jobStartPending = false
+            awaitingDubJob = false
             statusText = error.localizedDescription
+            jobIssue = error.localizedDescription
+            selection = .processing
         }
     }
 
@@ -543,6 +568,7 @@ final class AppState: ObservableObject {
         selectedProjectID = nil
         source = ""
         projectName = ""
+        dubName = ""
         seriesID = ""
         seriesContext = ""
         jobIssue = ""
@@ -796,9 +822,14 @@ final class AppState: ObservableObject {
             statusText = message
             if id.hasPrefix("quick-") || (pendingQuickStart && id.hasPrefix("create-project-")) {
                 failQuickStart(message)
-            } else if (id.hasPrefix("run-") || id.hasPrefix("resume-")) && selection == .processing {
+            } else if id.hasPrefix("projects-") && pendingQuickStart {
+                failQuickStart("Could not load the new project: \(message)")
+            } else if id.hasPrefix("run-") || id.hasPrefix("resume-") || id.hasPrefix("analyze-") {
+                jobStartPending = false
+                awaitingDubJob = false
                 jobIssue = message
                 jobIssueDetail = message
+                if !id.hasPrefix("analyze-") { selection = .processing }
             }
             if id.hasPrefix("save-character-") {
                 characterSaveMessage = message
@@ -872,11 +903,23 @@ final class AppState: ObservableObject {
         default:
             if id.hasPrefix("run-") || id.hasPrefix("analyze-") || id.hasPrefix("resume-") {
                 if let jobID = result["job_id"] as? String {
-                    activeJobID = jobID
-                    if id.hasPrefix("run-") && outputMode == .dub { openResultForJobID = jobID }
-                    statusText = "Queued"
+                    let finishedEarly = finishedBeforeStartResponse.remove(jobID) != nil
+                    let isDub = awaitingDubJob
+                    jobStartPending = false
+                    awaitingDubJob = false
+                    if isDub { openResultForJobID = jobID }
+                    if !finishedEarly {
+                        activeJobID = jobID
+                        statusText = "Queued"
+                    }
                     activity.append(ActivityEntry(kind: .info, message: "Started \(jobID)."))
                     refreshProjects()
+                } else {
+                    jobStartPending = false
+                    awaitingDubJob = false
+                    jobIssue = "The processing service did not return a job ID. Reconnect and try again."
+                    statusText = "Could not start"
+                    selection = .processing
                 }
             } else if id.hasPrefix("projects-") {
                 let rows = resultAny as? [[String: Any]] ?? []
@@ -904,12 +947,12 @@ final class AppState: ObservableObject {
                     subtitlesJobFinished = false
                     if selection == .processing { selection = .subtitles }
                 }
-                if openPendingReview {
-                    if let waiting = currentProject?.dubs.first(where: { $0.status == "paused" && $0.error == "Subtitle review required before voice generation" }) {
+                if let pendingReviewJobID {
+                    if let waiting = currentProject?.dubs.first(where: { $0.jobID == pendingReviewJobID && $0.status == "paused" && $0.error == "Subtitle review required before voice generation" }) {
                         selection = .dub(waiting.id)
                         statusText = "Review subtitles before dubbing"
                     }
-                    openPendingReview = false
+                    self.pendingReviewJobID = nil
                 }
                 if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
                     self.selectedProjectID = nil
@@ -924,6 +967,10 @@ final class AppState: ObservableObject {
                 selectedProjectID = result["project_id"] as? String
                 if id.hasPrefix("create-project-quick-") {
                     pendingQuickProjectID = selectedProjectID
+                    if selectedProjectID == nil {
+                        failQuickStart("The processing service did not return a project ID. Reconnect and try again.")
+                        return
+                    }
                     statusText = "Preparing dub…"
                 } else {
                     selection = .overview
@@ -976,8 +1023,10 @@ final class AppState: ObservableObject {
         switch event {
         case "job_started":
             analyzingCurrentJob = data["kind"] as? String == "analyze"
-            if let jobID = payload["job_id"] as? String, !analyzingCurrentJob,
-               outputMode == .dub { openResultForJobID = jobID }
+            if let jobID = payload["job_id"] as? String, jobStartPending {
+                activeJobID = jobID
+                if awaitingDubJob { openResultForJobID = jobID }
+            }
 
         case "stage":
             let title = data["title"] as? String ?? "Working"
@@ -1019,9 +1068,12 @@ final class AppState: ObservableObject {
 
         case "finished":
             let status = data["status"] as? String ?? "completed"
+            if jobStartPending, let jobID = payload["job_id"] as? String {
+                finishedBeforeStartResponse.insert(jobID)
+            }
             if status != "completed" { openSubtitlesOnFinish = false }
             subtitlesJobFinished = openSubtitlesOnFinish && status == "completed"
-            openPendingReview = status == "paused"
+            pendingReviewJobID = status == "paused" ? payload["job_id"] as? String : nil
             let showVoices = analyzingCurrentJob && status == "completed"
             analyzingCurrentJob = false
             activeJobID = nil
