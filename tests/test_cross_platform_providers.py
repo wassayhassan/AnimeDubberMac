@@ -41,7 +41,7 @@ class CrossPlatformProviderTests(unittest.TestCase):
                                       turbo=True, american_english=True)
                 load.assert_called_once_with("cpu", False)
                 self.assertEqual(model.generate.call_args.kwargs["cfg_weight"], 0.0)
-                self.assertEqual(model.generate.call_args.kwargs["audio_prompt_path"], str(reference))
+                self.assertEqual(model.generate.call_args.kwargs["audio_prompt_path"], str(reference.resolve()))
                 self.assertTrue(output.is_file())
 
                 load.reset_mock()
