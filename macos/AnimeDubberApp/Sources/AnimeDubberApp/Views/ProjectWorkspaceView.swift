@@ -168,6 +168,8 @@ struct ArtifactLink: View {
     let path: String
     @State private var showsPath = false
 
+    private var fileExists: Bool { FileManager.default.fileExists(atPath: path) }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: path.hasSuffix(".srt") || path.hasSuffix(".vtt") ? "captions.bubble" : "doc")
@@ -178,10 +180,16 @@ struct ArtifactLink: View {
                     Text(path).font(.caption.monospaced()).foregroundStyle(.secondary)
                         .lineLimit(2).textSelection(.enabled)
                 }
+                if !fileExists {
+                    Text("File missing from its saved location")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
             Spacer()
             Button("Open") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+                .disabled(!fileExists)
             Button("Save…") { exportFile(path) }
+                .disabled(!fileExists)
             Button { showsPath.toggle() } label: {
                 Image(systemName: "info.circle")
             }.help("Show file location")

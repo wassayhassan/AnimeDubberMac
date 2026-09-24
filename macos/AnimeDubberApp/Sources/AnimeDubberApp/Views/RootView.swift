@@ -9,7 +9,7 @@ struct RootView: View {
                 Section("Library") {
                     sidebarRow(.projects)
                     sidebarRow(.newProject)
-                    if state.activeJobID != nil || state.startPending { sidebarRow(.processing) }
+                    if state.activeJobID != nil || state.startPending || state.jobStartPending { sidebarRow(.processing) }
                 }
 
                 if let project = state.currentProject {

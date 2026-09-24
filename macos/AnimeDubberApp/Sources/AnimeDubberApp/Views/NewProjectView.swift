@@ -64,7 +64,7 @@ struct NewProjectView: View {
                         state.selection = .settings
                     }
                 }
-                if !state.canQuickStart && !state.startPending && state.activeJobID == nil {
+                if !state.canQuickStart && !state.startPending && !state.jobStartPending && state.activeJobID == nil {
                     Button("Reconnect Processing Service") { state.connectBackend() }
                 }
 
