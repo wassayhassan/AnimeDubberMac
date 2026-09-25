@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from anime_dubber.application.service import ApplicationService
-from anime_dubber.core import Config, Segment, run_pipeline, translate_with_llm, LLM_MODEL, CommandRunner
+from anime_dubber.core import Config, Segment, run_pipeline, translate_with_llm, LLM_MODEL, CommandRunner, _version_profiles
+from anime_dubber.application.service import config_from_dict
+from anime_dubber.characters import CharacterProfile
 import hashlib
 import json
 import sys
@@ -14,6 +16,17 @@ import types
 
 
 class ProjectVersionsTests(unittest.TestCase):
+    def test_voice_choices_are_version_scoped(self):
+        shared = CharacterProfile(id="speaker_1", display_name="Lead", kokoro_voice="af_heart")
+        first = _version_profiles([shared], {"speaker_1": {"tts_provider": "kokoro", "kokoro_voice": "am_adam"}})
+        second = _version_profiles([shared], {"speaker_1": {"tts_provider": "chatterbox"}})
+        self.assertEqual(shared.kokoro_voice, "af_heart")
+        self.assertEqual(first["speaker_1"]["kokoro_voice"], "am_adam")
+        self.assertEqual(second["speaker_1"]["tts_provider"], "chatterbox")
+        self.assertEqual(config_from_dict({"source": "source.mp4", "output_dir": "/tmp",
+                                           "voice_overrides": {"speaker_1": {"tts_provider": "kokoro"}}})
+                         .voice_overrides["speaker_1"]["tts_provider"], "kokoro")
+
     def test_failed_dub_retries_in_place_after_restart(self):
         with tempfile.TemporaryDirectory() as temp:
             first_service = ApplicationService()

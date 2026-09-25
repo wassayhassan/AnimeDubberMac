@@ -7,6 +7,7 @@ enum SidebarDestination: Hashable {
     case subtitles
     case dubs
     case dub(String)
+    case review(String)
     case projectSettings
     case newDub
     case newSubtitles
@@ -18,18 +19,19 @@ enum SidebarDestination: Hashable {
 
     var title: String {
         switch self {
-        case .newProject: "Dub a Video"
+        case .newProject: "New Project"
         case .overview: "Overview"
-        case .media: "Source / Media"
+        case .media: "Source & Analysis"
         case .subtitles: "Subtitles"
         case .dubs: "Dubs"
         case .dub: "Dub Details"
+        case .review: "Review"
         case .projectSettings: "Project Settings"
         case .newDub: "New Dub"
         case .newSubtitles: "Generate Subtitles"
         case .projects: "Projects"
         case .processing: "Processing"
-        case .characters: "Characters"
+        case .characters: "Speakers"
         case .activity: "Activity"
         case .settings: "Settings"
         }
@@ -43,6 +45,7 @@ enum SidebarDestination: Hashable {
         case .subtitles: "captions.bubble"
         case .dubs: "waveform"
         case .dub: "waveform.circle"
+        case .review: "text.magnifyingglass"
         case .projectSettings: "slider.horizontal.3"
         case .newDub: "waveform.badge.plus"
         case .newSubtitles: "text.badge.plus"
@@ -203,6 +206,8 @@ struct ProjectSummary: Identifiable {
     let dubs: [DubSummary]
     let warningCount: Int
     let lastError: String?
+    let sourceLanguage: String?
+    let analysisRevision: Int
 
     init?(dictionary: [String: Any]) {
         guard let projectID = dictionary["project_id"] as? String, !projectID.isEmpty else { return nil }
@@ -228,6 +233,8 @@ struct ProjectSummary: Identifiable {
             .sorted { $0.createdAt > $1.createdAt }
         warningCount = (dictionary["warning_count"] as? NSNumber)?.intValue ?? 0
         lastError = dictionary["last_error"] as? String
+        sourceLanguage = dictionary["source_language"] as? String
+        analysisRevision = (dictionary["analysis_revision"] as? NSNumber)?.intValue ?? 0
     }
 
     var displayName: String {
@@ -273,6 +280,7 @@ struct DubSummary: Identifiable {
     let error: String?
     let sync: String
     let duration: Double?
+    let analysisRevision: Int
 
     init?(dictionary: [String: Any]) {
         guard let id = dictionary["id"] as? String else { return nil }
@@ -291,6 +299,7 @@ struct DubSummary: Identifiable {
         error = dictionary["error"] as? String
         sync = dictionary["sync"] as? String ?? "Timing metadata unavailable"
         duration = (dictionary["duration"] as? NSNumber)?.doubleValue
+        analysisRevision = (dictionary["analysis_revision"] as? NSNumber)?.intValue ?? 0
     }
 
     var title: String { name.isEmpty ? "\(language.uppercased()) dub" : name }

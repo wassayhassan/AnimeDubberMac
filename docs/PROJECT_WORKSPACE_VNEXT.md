@@ -24,7 +24,7 @@ Existing schema 1 manifests and older `*_run.json` outputs are presented as a le
 
 ## Language and provider limits
 
-The source-language pipeline currently assumes Mandarin (`zh`). English (`en`) supports the existing providers. Spanish, French, German and Japanese translations use MLX LLM or Ollama; Whisper direct translation only emits English. Non-English dubbing currently requires an ElevenLabs multilingual voice. Subtitle-only jobs do not require TTS. These constraints are checked before a job begins, and the New Dub screen explains them.
+Current jobs request automatic detection of the primary source language. The available speech and translation runtimes depend on the installed platform providers. Whisper direct translation only emits English; non-English dubs require Chatterbox Multilingual or ElevenLabs. Subtitle-only jobs do not require TTS. The New Dub screen checks available providers and explains unsupported combinations before submission; its checks do not replace a full runtime model and media validation.
 
 The Dub Details timing note describes the current timestamp fitting algorithm. It does not claim that lip sync has been measured visually or guarantee frame-perfect timing. Voice assignments are available in each dub's snapshotted character map. Media durations are saved once audio is probed.
 

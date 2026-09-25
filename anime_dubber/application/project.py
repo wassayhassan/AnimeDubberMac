@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import uuid
@@ -48,11 +49,15 @@ def _atomic_write(path: Path, payload: dict) -> None:
 
 def _upgrade(data: dict) -> dict:
     if data.get("schema_version") == 2:
+        data.setdefault("analysis_revision", 0)
+        data.setdefault("analysis_fingerprints", {})
         return data
     artifacts = dict(data.get("artifacts") or {})
     data["schema_version"] = 2
     data.setdefault("name", "")
     data.setdefault("subtitles", {})
+    data.setdefault("analysis_revision", 0)
+    data.setdefault("analysis_fingerprints", {})
     if "dubbed_video" in artifacts and not data.get("dubs"):
         data["dubs"] = [{
             "id": "legacy", "name": "English — Legacy", "language": "en",
@@ -105,6 +110,7 @@ class ProjectStore:
             "stage_title": "Ready", "progress": None, "active_job_id": None,
             "created_at": now, "updated_at": now, "config": {},
             "artifacts": {}, "subtitles": {}, "dubs": [], "warnings": [],
+            "analysis_revision": 0, "analysis_fingerprints": {},
             "last_error": None, "runs": [],
         }
         _atomic_write(self.manifest_path, data)
@@ -152,6 +158,8 @@ class ProjectStore:
             "updated_at": now,
             "config": _redacted_config(config),
             "artifacts": dict(old.get("artifacts") or {}),
+            "analysis_revision": old.get("analysis_revision", 0),
+            "analysis_fingerprints": dict(old.get("analysis_fingerprints") or {}),
             "subtitles": dict(old.get("subtitles") or {}),
             "dubs": list(old.get("dubs") or []),
             "warnings": list(old.get("warnings") or [])[-50:],
@@ -175,6 +183,7 @@ class ProjectStore:
                 "status": "running", "stage": "preparing", "created_at": now,
                 "updated_at": now, "job_id": job_id, "config": _redacted_config(config),
                 "artifacts": {}, "warnings": [], "error": None,
+                "analysis_revision": payload["analysis_revision"],
                 "sync": "Speech clips start at source subtitle timestamps and are trimmed or time-stretched to their source windows.",
                 })
         _atomic_write(self.manifest_path, payload)
@@ -207,11 +216,17 @@ class ProjectStore:
         if not payload:
             return
         path = str(path)
+        if kind in {"source_srt", "chinese_srt"}:
+            self._update_analysis_fingerprint(payload, kind, path)
+        elif kind == "character_map":
+            shared_map = self.output_dir / f"{self.project_id}_characters.json"
+            self._update_analysis_fingerprint(payload, kind, str(shared_map if shared_map.exists() else path))
         payload.setdefault("artifacts", {})[kind] = path
         if kind in {"source_srt", "chinese_srt"}:
             payload["source_language"] = language
         if kind.endswith("_srt") or kind.endswith("_vtt") or kind == "review_report":
-            key = f"{version_id}:{language}" if version_id else language
+            source_caption = kind in {"source_srt", "source_vtt", "chinese_srt", "chinese_vtt"}
+            key = f"source:{language}" if source_caption else (f"{version_id}:{language}" if version_id else language)
             subtitle = payload.setdefault("subtitles", {}).setdefault(key, {
                 "language": language, "created_at": _now(), "artifacts": {},
             })
@@ -219,8 +234,28 @@ class ProjectStore:
         for dub in payload.get("dubs", []):
             if dub.get("id") == dub_id:
                 dub.setdefault("artifacts", {})[kind] = path
+                dub["analysis_revision"] = payload.get("analysis_revision", 0)
                 if kind in {"source_srt", "chinese_srt"}:
                     dub["source_language"] = language
+        payload["updated_at"] = _now()
+        _atomic_write(self.manifest_path, payload)
+
+    @staticmethod
+    def _update_analysis_fingerprint(payload: dict, kind: str, path: str) -> None:
+        source = Path(path)
+        if not source.is_file():
+            return
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        fingerprints = payload.setdefault("analysis_fingerprints", {})
+        if fingerprints.get(kind) != digest:
+            fingerprints[kind] = digest
+            payload["analysis_revision"] = int(payload.get("analysis_revision") or 0) + 1
+
+    def record_shared_analysis(self, kind: str, path: str) -> None:
+        payload = self.load()
+        if not payload:
+            return
+        self._update_analysis_fingerprint(payload, kind, path)
         payload["updated_at"] = _now()
         _atomic_write(self.manifest_path, payload)
 
@@ -345,6 +380,7 @@ def list_projects(output_dir: Path) -> list[dict]:
         rows.append({
             "project_id": str(data.get("project_id") or path.stem),
             "source": str(data.get("source") or ""),
+            "source_language": data.get("source_language"),
             "series_id": str(data.get("series_id") or ""),
             "output_dir": str(data.get("output_dir") or Path(output_dir).expanduser()),
             "status": str(data.get("status") or "unknown"),
@@ -359,6 +395,7 @@ def list_projects(output_dir: Path) -> list[dict]:
             "dubs": list(data.get("dubs") or []),
             "warning_count": len(data.get("warnings") or []),
             "last_error": data.get("last_error"),
+            "analysis_revision": data.get("analysis_revision", 0),
             "manifest_path": str(path),
         })
     known_ids = {str(row.get("project_id") or "") for row in rows}

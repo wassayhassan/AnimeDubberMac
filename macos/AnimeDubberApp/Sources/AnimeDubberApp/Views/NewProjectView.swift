@@ -7,9 +7,9 @@ struct NewProjectView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Label("Dub a Video", systemImage: "waveform.badge.plus")
+                Label("Create a Project", systemImage: "folder.badge.plus")
                     .font(.largeTitle.bold())
-                Text("Add a video, choose a language, and we'll make the dub and subtitles automatically.")
+                Text("Add the source once. This project keeps the video, transcript, speakers and subtitles for every dub version.")
                     .foregroundStyle(.secondary)
 
                 Form {
@@ -21,7 +21,7 @@ struct NewProjectView: View {
                         Text("You can also drop a video file here. Use the video's page link, not a temporary playback URL.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Section("Dub language") {
+                    Section("First dub language") {
                         Picker("Language", selection: $state.targetLanguage) {
                             Text("English").tag("en")
                             Text("Spanish").tag("es")
@@ -78,7 +78,7 @@ struct NewProjectView: View {
                     Button("Create Project Only") { state.createProject() }
                         .disabled(state.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Spacer()
-                    Button("Dub Video") { state.quickStart() }
+                    Button("Create Project & Dub") { state.quickStart() }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .disabled(!state.canQuickStart || state.quickStartProblem != nil)
@@ -88,6 +88,6 @@ struct NewProjectView: View {
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .navigationTitle("Dub a Video")
+        .navigationTitle("New Project")
     }
 }

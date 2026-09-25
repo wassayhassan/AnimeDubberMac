@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ProjectWorkspaceView: View {
     @EnvironmentObject private var state: AppState
+    @State private var showingComparison = false
 
     var body: some View {
         ScrollView {
@@ -12,7 +13,6 @@ struct ProjectWorkspaceView: View {
                     header(project)
                     switch state.selection ?? .overview {
                     case .media: media(project)
-                    case .subtitles: subtitles(project)
                     case .dubs: dubs(project)
                     default: overview(project)
                     }
@@ -25,6 +25,11 @@ struct ProjectWorkspaceView: View {
             }
         }
         .navigationTitle(state.currentProject?.displayName ?? "Project")
+        .sheet(isPresented: $showingComparison) {
+            if let project = state.currentProject {
+                DubComparisonView(project: project).frame(minWidth: 880, minHeight: 640)
+            }
+        }
     }
 
     private func header(_ project: ProjectSummary) -> some View {
@@ -34,6 +39,12 @@ struct ProjectWorkspaceView: View {
             HStack {
                 Label("\(project.dubs.count) dubs", systemImage: "waveform")
                 Label("\(project.subtitles.count) subtitle sets", systemImage: "captions.bubble")
+                if let language = project.sourceLanguage {
+                    Label("Source: \(language.uppercased())", systemImage: "globe")
+                }
+                if project.analysisRevision > 0 {
+                    Label("Analysis revision \(project.analysisRevision)", systemImage: "square.stack.3d.up")
+                }
                 if project.status == "running" {
                     Label(project.stageTitle, systemImage: "hourglass")
                 }
@@ -44,6 +55,48 @@ struct ProjectWorkspaceView: View {
 
     private func overview(_ project: ProjectSummary) -> some View {
         VStack(alignment: .leading, spacing: 20) {
+            if !state.jobIssue.isEmpty {
+                GroupBox("Needs attention") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(state.jobIssue, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        Button("System Check") { state.runSystemCheck() }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if project.status == "running" || (state.jobStartPending && project.id == state.selectedProjectID) {
+                GroupBox("Project activity") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(state.stageDetail.isEmpty ? project.stageTitle : state.stageDetail, systemImage: "hourglass")
+                        if let fraction = state.progressFraction ?? project.progress {
+                            ProgressView(value: fraction)
+                            Text("Current step: \(fraction, format: .percent.precision(.fractionLength(0)))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else { ProgressView() }
+                        if !state.downloadDetail.isEmpty { Text(state.downloadDetail).font(.caption) }
+                        Text("Completed subtitles are available below while voices and video continue processing.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if state.activeJobID != nil {
+                            Button("Pause and keep completed work") { state.cancelActiveJob() }
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            GroupBox("Shared source analysis") {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Transcript", value: project.artifacts["source_srt"] != nil || project.artifacts["chinese_srt"] != nil ? "Ready" : "Pending")
+                    LabeledContent("Speaker map", value: project.artifacts["character_map"] != nil ? "Ready" : "Pending")
+                    LabeledContent("Source video", value: project.artifacts["source_video"] != nil ? "Ready" : "Pending")
+                    HStack {
+                        Button("Review Subtitles") { state.selection = .subtitles }
+                        Button("Review Speakers") { state.selection = .characters }
+                        if project.artifacts["source_srt"] == nil && project.artifacts["chinese_srt"] == nil {
+                            Button("Analyze Source") { state.startJob(analysis: true) }
+                                .disabled(!state.canStartJob)
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
             GroupBox("Source") {
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent("Series", value: project.seriesID.isEmpty ? "—" : project.seriesID)
@@ -72,7 +125,7 @@ struct ProjectWorkspaceView: View {
             DisclosureGroup("Project files and settings") {
                 media(project)
                 Button("Project Settings") { state.selection = .projectSettings }
-                Button("Character Voices") { state.selection = .characters }
+                Button("Speakers & Voices") { state.selection = .characters }
             }
         }
     }
@@ -127,11 +180,11 @@ struct ProjectWorkspaceView: View {
     private func dubs(_ project: ProjectSummary) -> some View {
         GroupBox("Dub Versions") {
             VStack(alignment: .leading, spacing: 12) {
-                if project.dubs.isEmpty {
+            if project.dubs.isEmpty {
                     Text("No dub versions yet. A new dub will keep its own video, subtitles and settings.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(project.dubs) { dub in
+            ForEach(project.dubs) { dub in
                     Button {
                         state.selectDub(dub)
                     } label: {
@@ -140,7 +193,7 @@ struct ProjectWorkspaceView: View {
                                 .foregroundStyle(dub.status == "completed" ? Color.green : Color.secondary)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(dub.title).fontWeight(.medium)
-                                Text("\(dub.language.uppercased()) · \(dub.config["tts_engine"] as? String ?? "Voice pending") · \(dub.createdAt)")
+                                Text("\(dub.language.uppercased()) · \(dub.config["tts_engine"] as? String ?? "Voice pending") · analysis rev \(dub.analysisRevision) · \(dub.createdAt)")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -149,9 +202,11 @@ struct ProjectWorkspaceView: View {
                         }.contentShape(Rectangle())
                     }.buttonStyle(.plain)
                     Divider()
-                }
-                HStack {
-                    Spacer()
+            }
+            HStack {
+                Button("Compare Versions", systemImage: "rectangle.split.2x1") { showingComparison = true }
+                    .disabled(project.dubs.filter { $0.status == "completed" && $0.artifacts["dubbed_video"] != nil }.count < 2)
+                Spacer()
                     Button("New Dub", systemImage: "waveform.badge.plus") {
                         state.outputMode = .dub
                         state.dubName = ""

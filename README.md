@@ -63,9 +63,11 @@ Open it normally from Finder or Spotlight.
 
 ### Dub a video
 
-Open **Dub a Video**, paste the video's normal page URL or choose/drop a local file, select the language, and click **Dub Video**. The app checks the required tools, creates a project, generates subtitles and voices, and opens the finished video. The progress screen shows the current stage; its percentage describes that stage rather than the entire job. Use **Save Video…** on the result page to export the finished movie.
+Open **New Project**, paste the video's normal page URL or choose/drop a local file, select the first dub language, and click **Create Project & Dub**. This saves a project before processing starts. Its overview tracks source analysis and dub progress; subtitles become available as soon as their stage finishes. Open the finished dub to preview it, inspect review notes, and export available files. To make another language or voice version, open the same project and choose **New Dub**. **Create Project Only** is available if you want to analyze the source or generate subtitles without starting a dub.
 
-Source language is detected automatically. English uses the existing local voice path; other supported target languages use Chatterbox Multilingual when installed, or ElevenLabs if you configure an API key. A missing model or tool is reported before the one-click job starts; use **System Check** for details. The first model download can take time. Voice, subtitle, and timing changes can be inspected later in the project's dub details. Automatic detection is for the primary spoken language of the video; heavily code-switched dialogue may need a manually specified source language in the CLI.
+Project speakers are shared, while voice choices in **New Dub → Speaker voices for this version** affect only that version. Existing outputs retain their own settings and speaker-map snapshots. **Compare Versions** opens two completed dubs at matching source timestamps; versions made from different source-analysis revisions are labeled accordingly.
+
+Source language is detected automatically by the selected speech engine. English uses the existing local voice path; other supported target languages need Chatterbox Multilingual when installed, or ElevenLabs with an API key. A missing model or tool is reported before the one-click job starts; use **System Check** for details. The first model download can take time. Automatic detection targets the primary spoken language of the video; heavily code-switched dialogue may need a manually specified source language in the CLI. Review notes and timestamp seeking help identify uncertain lines but do not guarantee translation accuracy or lip sync.
 
 To rebuild only the native app:
 
