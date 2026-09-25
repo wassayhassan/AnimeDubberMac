@@ -33,7 +33,8 @@ class ReviewTests(unittest.TestCase):
         # check can mistake leftover, untranslated Chinese for valid Japanese.
         leftover_chinese = "这是没有翻译的中文文本"
         real_japanese = "これは翻訳された日本語のテキストです"
-        self.assertTrue(_wrong_target_script(leftover_chinese, "ja"))
+        self.assertFalse(_wrong_target_script(leftover_chinese, "ja"))
+        self.assertTrue(_wrong_target_script(leftover_chinese, "ja", leftover_chinese, "zh"))
         self.assertFalse(_wrong_target_script(real_japanese, "ja"))
 
         chinese_source = {"start": 0.0, "end": 2.0, "text": leftover_chinese}
@@ -41,6 +42,33 @@ class ReviewTests(unittest.TestCase):
         translated = {"start": 0.0, "end": 2.0, "text": real_japanese}
         self.assertIn("untranslated_chinese", flags_for(chinese_source, untranslated, "ja", "zh"))
         self.assertEqual(flags_for(chinese_source, translated, "ja", "zh"), [])
+
+        punctuated = {**untranslated, "text": leftover_chinese + "！"}
+        self.assertIn("untranslated_chinese", flags_for(chinese_source, punctuated, "ja", "zh"))
+
+    def test_kanji_only_japanese_is_not_rejected_by_script_or_name_match(self):
+        source = {"start": 0.0, "end": 3.0, "text": "这段话应该翻译成日语"}
+        name = {**source, "text": "山田太郎"}
+        self.assertFalse(_wrong_target_script(name["text"], "ja"))
+        self.assertFalse(_wrong_target_script(name["text"], "ja", source["text"], "zh"))
+        self.assertEqual(flags_for(source, name, "ja", "zh"), [])
+        same_name = {**source, "text": "山田太郎"}
+        self.assertEqual(flags_for(same_name, name, "ja", "zh"), [])
+
+    def test_review_accepts_kanji_only_japanese_model_suggestion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            original, target, report = base / "zh.srt", base / "ja.srt", base / "ja.review.json"
+            original.write_text(srt(["这是没有翻译的中文文本"]), encoding="utf-8")
+            target.write_text(srt(["这是没有翻译的中文文本"]), encoding="utf-8")
+            fake = type("FakeMLX", (), {
+                "load": staticmethod(lambda _: (object(), type("Tokenizer", (), {"chat_template": None})())),
+                "generate": staticmethod(lambda *_args, **_kwargs: '[{"id": 1, "text": "山田太郎"}]'),
+            })()
+            with patch.dict(sys.modules, {"mlx_lm": fake}):
+                result = review_subtitles(original, target, report, language="ja",
+                                          source_language="zh", model="test")
+            self.assertEqual(result["flags"][0]["suggestion"], "山田太郎")
 
     def test_auto_rewrite_measures_voice_and_finishes_without_review(self):
         with tempfile.TemporaryDirectory() as temp:

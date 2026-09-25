@@ -28,13 +28,8 @@ SCRIPTS = {
     "ko": re.compile(r"[\uac00-\ud7af]"), "hi": re.compile(r"[\u0900-\u097f]"),
     "ar": re.compile(r"[\u0600-\u06ff]"),
 }
-# Japanese kanji sits inside the same Unicode block as Chinese, so SCRIPTS["ja"]
-# (used to recognize "this text is Japanese") also matches plain, untranslated
-# Chinese. That is fine when checking a known-Japanese *source* line, but it is
-# the wrong test when validating a *translation* into Japanese: kana is the
-# only signal that reliably separates real Japanese from leftover Chinese, so
-# target-script validation uses this stricter map instead of SCRIPTS directly.
-TARGET_SCRIPTS = {**SCRIPTS, "ja": KANA}
+# Kanji-only Japanese and Chinese use the same Unicode block. Script alone
+# cannot tell them apart; compare source and translation before raising a flag.
 LATIN = re.compile(r"[A-Za-z\u00c0-\u024f]")
 LATIN_LANGUAGES = frozenset({"en", "es", "fr", "de", "pt", "it", "nl", "sv", "da", "no", "fi", "pl", "cs", "sk", "ro", "hu", "tr", "vi", "id", "ms", "tl", "sw", "hr", "sr", "sl", "et", "lv", "lt", "is", "ca", "gl", "eu", "af"})
 
@@ -48,9 +43,17 @@ def _expected_source(text: str, language: str) -> bool:
     return bool(script and script.search(text))
 
 
-def _wrong_target_script(text: str, language: str) -> bool:
-    return bool(text and not TARGET_SCRIPTS.get(language, LATIN).search(text)
-                and (HAN.search(text) or ODD.search(text)))
+def _copied_chinese(source: str, text: str, language: str, source_language: str) -> bool:
+    if source_language != "zh" or language != "ja" or KANA.search(text) or LATIN.search(text):
+        return False
+    source_han = "".join(HAN.findall(source))
+    return len(source_han) >= 8 and source_han == "".join(HAN.findall(text))
+
+
+def _wrong_target_script(text: str, language: str, source: str = "", source_language: str = "") -> bool:
+    return bool((text and not SCRIPTS.get(language, LATIN).search(text)
+                 and (HAN.search(text) or ODD.search(text)))
+                or _copied_chinese(source, text, language, source_language))
 
 
 def read_srt(path: Path) -> list[dict]:
@@ -91,13 +94,21 @@ def flags_for(source: dict, target: dict, language: str = "en", source_language:
     other_script = HAN if source_language not in {"zh", "ja"} else LATIN
     if expected and original and not expected.search(original) and other_script.search(original):
         reasons.append("non_chinese_source" if source_language == "zh" else "source_language_mismatch")
-    target_script = TARGET_SCRIPTS.get(language, LATIN)
+    target_script = SCRIPTS.get(language, LATIN)
+    # A short unchanged kanji name is often correct Japanese. A longer line
+    # whose Han characters survive unchanged (even with punctuation edits) is
+    # more likely untranslated. Neither case is decidable from script alone.
+    target_han = "".join(HAN.findall(translation))
+    ambiguous_kanji = (source_language == "zh" and language == "ja" and bool(target_han)
+                       and not KANA.search(translation) and not LATIN.search(translation))
+    copied_chinese = _copied_chinese(original, translation, language, source_language)
     if (expected and translation and language != source_language and expected.search(translation)
-            and (not target_script.search(translation) or (source_language == "zh" and language == "en"))):
+            and (not target_script.search(translation) or copied_chinese
+                 or (source_language == "zh" and language == "en"))):
         reasons.append("untranslated_chinese" if source_language == "zh" else "untranslated_source")
     if language == "en" and source_language == "zh" and re.search(r"\b(?:old six|force the king)\b", translation, re.I):
         reasons.append("literal_idiom")
-    if language != source_language and original.strip() == translation.strip():
+    if language != source_language and original.strip() == translation.strip() and not (ambiguous_kanji and not copied_chinese):
         reasons.append("untranslated_text")
     return reasons
 
@@ -275,7 +286,7 @@ def review_subtitles(
                     if (alternate_text and len(alternate_text.splitlines()) == 1
                             and len(alternate_text) <= 200 and
                             not alternate_text.startswith(("{", "[", "<")) and
-                            not _wrong_target_script(alternate_text, language)):
+                            not _wrong_target_script(alternate_text, language, row.get("asr_candidate", ""), source_language)):
                         row["asr_translation"] = alternate_text
                         _atomic_json_write(report_path, result)
                 if row.get("suggestion"):
@@ -328,7 +339,7 @@ def review_subtitles(
                 suggestion = parsed.get(row["cue"], "")
                 unchanged_mismatch = (source_mismatch and _expected_source(row.get("asr_candidate", ""), source_language)
                                       and suggestion.casefold().strip() == row["translation"].casefold().strip())
-                if not suggestion or unchanged_mismatch or _wrong_target_script(suggestion, language):
+                if not suggestion or unchanged_mismatch or _wrong_target_script(suggestion, language, row["source"], source_language):
                     # Smaller local models sometimes answer in prose instead of JSON.
                     # Retry this cue once with a simpler format before asking for a manual decision.
                     suggestion = ""
@@ -353,7 +364,7 @@ def review_subtitles(
                     retry = re.sub(r"^```[^\n]*\n|\n```$", "", retry).strip().strip('"')
                     if (retry and len(retry.splitlines()) == 1 and len(retry) <= 200
                             and not retry.startswith(("{", "[", "<"))
-                            and not _wrong_target_script(retry, language)
+                            and not _wrong_target_script(retry, language, row["source"], source_language)
                             and not (source_mismatch and _expected_source(alternate, source_language)
                                      and retry.casefold() == row["translation"].casefold())):
                         suggestion = retry
