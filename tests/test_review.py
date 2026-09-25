@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from anime_dubber.core import CommandRunner, Config, PipelineError, ReviewRequired, Segment, TimingOverlapError, run_pipeline
-from anime_dubber.review import review_subtitles, flags_for
+from anime_dubber.review import review_subtitles, flags_for, _wrong_target_script
 from anime_dubber.timing import TimingRewriter, usable_rewrite
 
 
@@ -27,6 +27,20 @@ class ReviewTests(unittest.TestCase):
         self.assertNotIn("untranslated_text", flags_for(spanish, spanish, "es", "es"))
         japanese = {"start": 0.0, "end": 2.0, "text": "こんにちは"}
         self.assertIn("untranslated_source", flags_for(japanese, japanese, "en", "ja"))
+
+    def test_untranslated_chinese_is_flagged_when_dubbing_into_japanese(self):
+        # Japanese kanji shares Unicode ranges with Chinese, so a naive script
+        # check can mistake leftover, untranslated Chinese for valid Japanese.
+        leftover_chinese = "这是没有翻译的中文文本"
+        real_japanese = "これは翻訳された日本語のテキストです"
+        self.assertTrue(_wrong_target_script(leftover_chinese, "ja"))
+        self.assertFalse(_wrong_target_script(real_japanese, "ja"))
+
+        chinese_source = {"start": 0.0, "end": 2.0, "text": leftover_chinese}
+        untranslated = {"start": 0.0, "end": 2.0, "text": leftover_chinese}
+        translated = {"start": 0.0, "end": 2.0, "text": real_japanese}
+        self.assertIn("untranslated_chinese", flags_for(chinese_source, untranslated, "ja", "zh"))
+        self.assertEqual(flags_for(chinese_source, translated, "ja", "zh"), [])
 
     def test_auto_rewrite_measures_voice_and_finishes_without_review(self):
         with tempfile.TemporaryDirectory() as temp:

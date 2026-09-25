@@ -21,12 +21,20 @@ from .languages import source_name, target_name
 
 TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,\.](\d{3})")
 HAN = re.compile(r"[\u3400-\u9fff]")
+KANA = re.compile(r"[\u3040-\u30ff]")
 ODD = re.compile(r"[\u0400-\u04ff\u0600-\u06ff\u0900-\u097f\u0e00-\u0e7f]")
 SCRIPTS = {
     "zh": HAN, "ja": re.compile(r"[\u3040-\u30ff\u3400-\u9fff]"),
     "ko": re.compile(r"[\uac00-\ud7af]"), "hi": re.compile(r"[\u0900-\u097f]"),
     "ar": re.compile(r"[\u0600-\u06ff]"),
 }
+# Japanese kanji sits inside the same Unicode block as Chinese, so SCRIPTS["ja"]
+# (used to recognize "this text is Japanese") also matches plain, untranslated
+# Chinese. That is fine when checking a known-Japanese *source* line, but it is
+# the wrong test when validating a *translation* into Japanese: kana is the
+# only signal that reliably separates real Japanese from leftover Chinese, so
+# target-script validation uses this stricter map instead of SCRIPTS directly.
+TARGET_SCRIPTS = {**SCRIPTS, "ja": KANA}
 LATIN = re.compile(r"[A-Za-z\u00c0-\u024f]")
 LATIN_LANGUAGES = frozenset({"en", "es", "fr", "de", "pt", "it", "nl", "sv", "da", "no", "fi", "pl", "cs", "sk", "ro", "hu", "tr", "vi", "id", "ms", "tl", "sw", "hr", "sr", "sl", "et", "lv", "lt", "is", "ca", "gl", "eu", "af"})
 
@@ -41,7 +49,7 @@ def _expected_source(text: str, language: str) -> bool:
 
 
 def _wrong_target_script(text: str, language: str) -> bool:
-    return bool(text and not SCRIPTS.get(language, LATIN).search(text)
+    return bool(text and not TARGET_SCRIPTS.get(language, LATIN).search(text)
                 and (HAN.search(text) or ODD.search(text)))
 
 
@@ -83,7 +91,7 @@ def flags_for(source: dict, target: dict, language: str = "en", source_language:
     other_script = HAN if source_language not in {"zh", "ja"} else LATIN
     if expected and original and not expected.search(original) and other_script.search(original):
         reasons.append("non_chinese_source" if source_language == "zh" else "source_language_mismatch")
-    target_script = SCRIPTS.get(language, LATIN)
+    target_script = TARGET_SCRIPTS.get(language, LATIN)
     if (expected and translation and language != source_language and expected.search(translation)
             and (not target_script.search(translation) or (source_language == "zh" and language == "en"))):
         reasons.append("untranslated_chinese" if source_language == "zh" else "untranslated_source")

@@ -218,6 +218,11 @@ Example:
 
 The backend emits structured stage, progress, log, warning, artifact, error, and completion events.
 
+Since the source language moved from a hardcoded `zh` to auto-detection, a few string values that cross this boundary carry language information and must stay in sync on both sides whenever they change:
+
+- **Review reasons** (`cue.reasons` in review reports): `non_chinese_source` / `untranslated_chinese` are emitted only when the detected source is Chinese; any other detected source emits `source_language_mismatch` / `untranslated_source` instead. SwiftUI review checks should match on both the Chinese-specific and generic reason strings.
+- **Subtitle artifact keys**: the original-language SRT/VTT is published as `chinese_srt`/`chinese_vtt` when the source is Chinese, or `source_srt`/`source_vtt` for any other detected source. UI code that labels these files should check the key against both names explicitly, not with a substring match, since only one of the two exists per dub.
+
 ## Audio behavior
 
 AnimeDubber retains the v3.4/v3.5 fixes:
@@ -320,6 +325,8 @@ python -m anime_dubber.cli review-subtitles \
   ~/Movies/AnimeDubber/versions/DUB_ID/VIDEO_ID_en.srt \
   --sample-seconds 300 --model mlx-community/Qwen3-8B-4bit
 ```
+
+Script-based checks (used to flag likely-untranslated lines and to validate LLM suggestions) recognize a language by its Unicode script. Japanese kanji shares its Unicode block with Chinese, so validating Japanese output specifically looks for kana (hiragana/katakana) rather than kanji alone — kanji-only text is ambiguous between real Japanese and untranslated Chinese, while kana reliably identifies Japanese. A very short, kana-free Japanese line (e.g. a single kanji word) can occasionally be flagged for review even when it's correct; treat these as low-confidence flags rather than confirmed errors.
 
 The command prints elapsed model-load and review time and saves a `.review.json` next to the translated SRT. On a subsequent invocation with the same inputs, completed suggestions are reused. Remove `--sample-seconds 300` to process remaining flagged cues. For a second transcription of suspicious source lines, add `--audio /path/to/extracted_dialogue.wav`; this loads the full Whisper Large v3 model and records its own timing. Use the separated dialogue WAV where possible. The alternate transcription and proposed translations are **unverified suggestions** in the report, not automatic changes to the existing SRT or dub. Model downloads are required on first use; this test measures incremental review cost, not the speed of full transcription or TTS.
 
