@@ -8,7 +8,6 @@ from unittest.mock import patch
 from anime_dubber.application.service import ApplicationService
 from anime_dubber.core import Config, Segment, run_pipeline, translate_with_llm, LLM_MODEL, CommandRunner, _version_profiles
 from anime_dubber.application.service import config_from_dict
-from anime_dubber.characters import CharacterProfile
 import hashlib
 import json
 import sys
@@ -17,7 +16,8 @@ import types
 
 class ProjectVersionsTests(unittest.TestCase):
     def test_voice_choices_are_version_scoped(self):
-        shared = CharacterProfile(id="speaker_1", display_name="Lead", kokoro_voice="af_heart")
+        shared = types.SimpleNamespace(id="speaker_1", kokoro_voice="af_heart",
+                                       to_dict=lambda: {"id": "speaker_1", "kokoro_voice": "af_heart"})
         first = _version_profiles([shared], {"speaker_1": {"tts_provider": "kokoro", "kokoro_voice": "am_adam"}})
         second = _version_profiles([shared], {"speaker_1": {"tts_provider": "chatterbox"}})
         self.assertEqual(shared.kokoro_voice, "af_heart")
