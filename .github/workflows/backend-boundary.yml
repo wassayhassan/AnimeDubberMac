@@ -35,7 +35,7 @@ jobs:
         run: python -m unittest tests.test_application_service tests.test_transport_protocol tests.test_cli tests.test_project_store tests.test_project_versions tests.test_cross_platform_providers tests.test_core tests.test_ffmpeg_pipeline tests.test_review -v
 
       - name: CLI help smoke test
-        run: python -m anime_dubber.cli --help
+        run: python -m dubcanvas --help
 
       - name: Backend hello smoke test
         shell: bash

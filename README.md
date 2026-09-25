@@ -12,7 +12,7 @@ cd AnimeDubberMac
 zsh setup.sh
 ```
 
-Setup installs dependencies, runs checks, and installs the app in `/Applications`. Open the app from Finder or Spotlight. The installed app bundle is currently named `AnimeDubber.app`.
+Setup installs dependencies, runs checks, and installs the app in `/Applications`. Open the app from Finder or Spotlight. The installed app bundle is named `DubCanvas.app`. Existing installs of `AnimeDubber.app` can be removed after confirming the new app works.
 
 1. Choose **New Project** and add a local video or video page URL.
 2. Choose a target language and start the first dub, or create the project with subtitles only.
@@ -32,13 +32,13 @@ Chatterbox and Kokoro provide local voices; ElevenLabs is optional and requires 
 The Python CLI also runs on macOS, Windows, and Linux. Install FFmpeg and ffprobe first. On Linux, run `bash setup-cross-platform.sh`; on Windows, run `.\\setup-cross-platform.ps1` in PowerShell.
 
 ```bash
-python -m anime_dubber.cli doctor
-python -m anime_dubber.cli new-project /path/to/video.mp4 -o ./output --name "My video"
-python -m anime_dubber.cli run /path/to/video.mp4 -o ./output --target-language en
-python -m anime_dubber.cli projects -o ./output
+python -m dubcanvas doctor
+python -m dubcanvas new-project /path/to/video.mp4 -o ./output --name "My video"
+python -m dubcanvas run /path/to/video.mp4 -o ./output --target-language en
+python -m dubcanvas projects -o ./output
 ```
 
-The CLI module remains `anime_dubber` for compatibility. Run `python -m anime_dubber.cli --help` for more commands and options.
+Run `python -m dubcanvas --help` for more commands and options. The old `python -m anime_dubber.cli` entry point still works with existing scripts.
 
 ## Notes
 

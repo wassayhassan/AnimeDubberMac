@@ -19,4 +19,4 @@ echo "FFmpeg/ffprobe must also be available on PATH."
 echo "For local Piper TTS, download a Piper .onnx voice model and pass --piper-model."
 echo "Ollama is optional; install/start it separately if you want --translation ollama."
 echo
-.venv/bin/python -m anime_dubber.cli doctor || true
+.venv/bin/python -m dubcanvas doctor || true

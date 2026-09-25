@@ -283,7 +283,7 @@ def synthesize_chatterbox(
     if not chatterbox_available():
         raise RuntimeError(
             "Chatterbox is not installed. Run macos/install_voice_engines.sh "
-            "or install chatterbox-tts in the AnimeDubber environment."
+            "or install chatterbox-tts in the DubCanvas environment."
         )
 
     if cancel_check:

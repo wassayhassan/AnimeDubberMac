@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP_VERSION="4.0.0a6"
-echo "AnimeDubber v${APP_VERSION} — setup"
+echo "DubCanvas v${APP_VERSION} — setup"
 echo "================================"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -55,7 +55,7 @@ python -m yt_dlp --version
 
 echo "Installing optional high-accuracy speaker encoder…"
 if ! python -m pip install "speechbrain>=1.0,<2"; then
-  echo "WARNING: SpeechBrain could not be installed. AnimeDubber will use its acoustic speaker-clustering fallback."
+  echo "WARNING: SpeechBrain could not be installed. DubCanvas will use its acoustic speaker-clustering fallback."
 fi
 
 echo "Installing local dubbing voices for supported target languages…"
@@ -75,14 +75,15 @@ import anime_dubber.characters
 import anime_dubber.application
 import anime_dubber.cli
 import anime_dubber.transport.stdio_server
+import dubcanvas
 print("Python imports: OK")
 PYIMPORT
 
 echo "Running CLI parser smoke test…"
-python -m anime_dubber.cli --help >/dev/null
+python -m dubcanvas --help >/dev/null
 
 echo "Running backend system check…"
-python -m anime_dubber.cli doctor || true
+python -m dubcanvas doctor || true
 
 if command -v xattr >/dev/null 2>&1; then
   xattr -dr com.apple.quarantine "$PWD" 2>/dev/null || true
@@ -102,5 +103,5 @@ fi
 
 echo
 echo "Setup complete."
-echo "CLI: .venv/bin/python -m anime_dubber.cli --help"
+echo "CLI: .venv/bin/python -m dubcanvas --help"
 echo "Run /bin/zsh macos/install_voice_engines.sh later to update local voice engines."

@@ -30,4 +30,4 @@ The Dub Details timing note describes the current timestamp fitting algorithm. I
 
 ## Verification
 
-Run `python -m unittest discover -s tests -q` for backend tests. On macOS 14 or newer, build with `swift build --package-path macos/AnimeDubberApp` and exercise project creation, early subtitle availability, two versions of the same source, preview, export and deletion. A full model download / long-video timing review requires a machine with the installed ML providers and test media.
+Run `python -m unittest discover -s tests -q` for backend tests. On macOS 14 or newer, build with `swift build --package-path macos/DubCanvasApp` and exercise project creation, early subtitle availability, two versions of the same source, preview, export and deletion. A full model download / long-video timing review requires a machine with the installed ML providers and test media.

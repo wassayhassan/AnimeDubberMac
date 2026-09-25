@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AnimeDubberApp: App {
+struct DubCanvasApp: App {
     @StateObject private var state = AppState()
 
     var body: some Scene {
@@ -19,7 +19,7 @@ struct AnimeDubberApp: App {
                 .keyboardShortcut("n", modifiers: .command)
             }
 
-            CommandMenu("AnimeDubber") {
+            CommandMenu("DubCanvas") {
                 Button("System Check") {
                     state.runSystemCheck()
                 }

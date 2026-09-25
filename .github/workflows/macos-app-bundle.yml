@@ -15,21 +15,23 @@ jobs:
       - name: Check installation target selection
         run: |
           zsh -n macos/package_app.sh
-          target="$(zsh macos/package_app.sh --install-to "$RUNNER_TEMP/AnimeDubber Test.app" --print-install-target | tail -1)"
-          test "$target" = "$RUNNER_TEMP/AnimeDubber Test.app"
+          target="$(zsh macos/package_app.sh --install-to "$RUNNER_TEMP/DubCanvas Test.app" --print-install-target | tail -1)"
+          test "$target" = "$RUNNER_TEMP/DubCanvas Test.app"
 
       - name: Build unsigned lightweight app bundle
         run: zsh macos/package_app.sh --no-embed-venv --no-sign
 
       - name: Validate bundle
         run: |
-          test -x dist/AnimeDubber.app/Contents/MacOS/AnimeDubber
-          test -f dist/AnimeDubber.app/Contents/Info.plist
-          test -f dist/AnimeDubber.app/Contents/Resources/AnimeDubber.icns
-          test -f dist/AnimeDubber.app/Contents/Resources/backend/anime_dubber/core.py
-          plutil -lint dist/AnimeDubber.app/Contents/Info.plist
+          test -x dist/DubCanvas.app/Contents/MacOS/DubCanvas
+          test -f dist/DubCanvas.app/Contents/Info.plist
+          test -f dist/DubCanvas.app/Contents/Resources/DubCanvas.icns
+          test -f dist/DubCanvas.app/Contents/Resources/backend/anime_dubber/core.py
+          test -f dist/DubCanvas.app/Contents/Resources/backend/dubcanvas/__main__.py
+          plutil -lint dist/DubCanvas.app/Contents/Info.plist
+          test "$(plutil -extract CFBundleDisplayName raw dist/DubCanvas.app/Contents/Info.plist)" = "DubCanvas"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AnimeDubber-macOS-lightweight
-          path: dist/AnimeDubber.app
+          name: DubCanvas-macOS-lightweight
+          path: dist/DubCanvas.app

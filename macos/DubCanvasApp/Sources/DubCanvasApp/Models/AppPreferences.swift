@@ -1,7 +1,7 @@
 import Foundation
 
 struct AppPreferences: Codable, Equatable {
-    var outputFolder = "~/Movies/AnimeDubber"
+    var outputFolder = "~/Movies/DubCanvas"
     var seriesID = ""
     var outputMode = OutputMode.dub.rawValue
     var asrProvider = ASRProvider.auto.rawValue

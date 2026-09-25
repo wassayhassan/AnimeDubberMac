@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PKG="$SCRIPT_DIR/AnimeDubberApp"
+PKG="$SCRIPT_DIR/DubCanvasApp"
 DIST="$ROOT/dist"
-APP="$DIST/AnimeDubber.app"
+APP="$DIST/DubCanvas.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     --print-install-target) PRINT_TARGET=1 ;;
     --install-to)
       if [[ $# -lt 2 ]]; then
-        echo "ERROR: --install-to needs the full path to AnimeDubber.app" >&2
+        echo "ERROR: --install-to needs the full path to a .app bundle" >&2
         exit 2
       fi
       INSTALL=1
@@ -56,7 +56,7 @@ done
 
 TARGET="$APP"
 if [[ "$INSTALL" -eq 1 ]]; then
-  TARGET="/Applications/AnimeDubber.app"
+  TARGET="/Applications/DubCanvas.app"
   if [[ -n "$INSTALL_TO" ]]; then
     if [[ "$INSTALL_TO" != /* || "$INSTALL_TO" != *.app ]]; then
       echo "ERROR: --install-to must be an absolute path ending in .app" >&2
@@ -71,8 +71,8 @@ if [[ "$PRINT_TARGET" -eq 1 ]]; then
   exit 0
 fi
 
-if [[ "$INSTALL" -eq 1 && "$TARGET" == "/Applications/AnimeDubber.app" && ! -w /Applications ]]; then
-  echo "ERROR: This account cannot write to /Applications. Build without --install, then move dist/AnimeDubber.app into /Applications using Finder." >&2
+if [[ "$INSTALL" -eq 1 && "$TARGET" == "/Applications/DubCanvas.app" && ! -w /Applications ]]; then
+  echo "ERROR: This account cannot write to /Applications. Build without --install, then move dist/DubCanvas.app into /Applications using Finder." >&2
   exit 1
 fi
 
@@ -92,7 +92,7 @@ SHORT_VERSION="${VERSION%%a*}"
 echo "Building SwiftUI app (release)…"
 swift build -c release --package-path "$PKG"
 BIN_DIR="$(swift build -c release --package-path "$PKG" --show-bin-path)"
-BIN="$BIN_DIR/AnimeDubberApp"
+BIN="$BIN_DIR/DubCanvasApp"
 if [[ ! -x "$BIN" ]]; then
   echo "ERROR: Swift build completed but executable was not found at $BIN"
   exit 1
@@ -101,21 +101,22 @@ fi
 echo "Assembling $APP…"
 rm -rf "$APP"
 mkdir -p "$MACOS" "$BACKEND" "$RESOURCES"
-cp "$BIN" "$MACOS/AnimeDubber"
-chmod +x "$MACOS/AnimeDubber"
+cp "$BIN" "$MACOS/DubCanvas"
+chmod +x "$MACOS/DubCanvas"
 
-ICON_SOURCE="$ROOT/macos/assets/AnimeDubberIcon.png"
-ICONSET="$DIST/AnimeDubber.iconset"
+ICON_SOURCE="$ROOT/macos/assets/DubCanvasIcon.png"
+ICONSET="$DIST/DubCanvas.iconset"
 mkdir -p "$ICONSET"
 for icon_size in 16 32 128 256 512; do
   sips -z "$icon_size" "$icon_size" "$ICON_SOURCE" --out "$ICONSET/icon_${icon_size}x${icon_size}.png" >/dev/null
   double_size=$((icon_size * 2))
   sips -z "$double_size" "$double_size" "$ICON_SOURCE" --out "$ICONSET/icon_${icon_size}x${icon_size}@2x.png" >/dev/null
 done
-iconutil -c icns "$ICONSET" -o "$RESOURCES/AnimeDubber.icns"
+iconutil -c icns "$ICONSET" -o "$RESOURCES/DubCanvas.icns"
 rm -rf "$ICONSET"
 
 ditto "$ROOT/anime_dubber" "$BACKEND/anime_dubber"
+ditto "$ROOT/dubcanvas" "$BACKEND/dubcanvas"
 cp "$ROOT/requirements.txt" "$BACKEND/requirements.txt"
 cp "$ROOT/requirements-cross-platform.txt" "$BACKEND/requirements-cross-platform.txt"
 cp "$ROOT/requirements-premium-voices.txt" "$BACKEND/requirements-premium-voices.txt"
@@ -136,15 +137,15 @@ cat > "$CONTENTS/Info.plist" <<EOF
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>AnimeDubber</string>
+  <string>DubCanvas</string>
   <key>CFBundleIdentifier</key>
   <string>com.animedubber.app</string>
   <key>CFBundleDisplayName</key>
-  <string>AnimeDubber</string>
+  <string>DubCanvas</string>
   <key>CFBundleName</key>
-  <string>AnimeDubber</string>
+  <string>DubCanvas</string>
   <key>CFBundleIconFile</key>
-  <string>AnimeDubber.icns</string>
+  <string>DubCanvas.icns</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -167,8 +168,8 @@ if [[ "$SIGN" -eq 1 ]]; then
 fi
 
 if [[ "$INSTALL" -eq 1 ]]; then
-  if pgrep -x AnimeDubber >/dev/null 2>&1; then
-    echo "ERROR: Quit AnimeDubber before replacing the installed app." >&2
+  if pgrep -x DubCanvas >/dev/null 2>&1 || pgrep -x AnimeDubber >/dev/null 2>&1; then
+    echo "ERROR: Quit DubCanvas or the older AnimeDubber app before installing." >&2
     exit 1
   fi
   mkdir -p "${TARGET:h}"
@@ -179,14 +180,14 @@ if [[ "$INSTALL" -eq 1 ]]; then
   if mv "$STAGED" "$TARGET"; then
     if [[ -e "$BACKUP" ]]; then rm -rf "$BACKUP"; fi
     if [[ "$TARGET" != "$APP" ]]; then rm -rf "$APP"; fi
-    if [[ -z "$INSTALL_TO" && -e "$HOME/Applications/AnimeDubber.app" ]]; then
-      rm -rf "$HOME/Applications/AnimeDubber.app"
-      echo "Removed old copy: $HOME/Applications/AnimeDubber.app"
+    if [[ -z "$INSTALL_TO" && -e "$HOME/Applications/DubCanvas.app" ]]; then
+      rm -rf "$HOME/Applications/DubCanvas.app"
+      echo "Removed old copy: $HOME/Applications/DubCanvas.app"
     fi
     echo "Updated: $TARGET"
   else
     if [[ -e "$BACKUP" ]]; then mv "$BACKUP" "$TARGET"; fi
-    echo "ERROR: Could not install AnimeDubber at $TARGET" >&2
+    echo "ERROR: Could not install DubCanvas at $TARGET" >&2
     exit 1
   fi
 else
@@ -198,5 +199,5 @@ if [[ "$OPEN_APP" -eq 1 ]]; then
 fi
 
 echo
-echo "AnimeDubber is ready."
+echo "DubCanvas is ready."
 echo "Models remain in the normal Hugging Face / ML caches and are not duplicated inside the app."

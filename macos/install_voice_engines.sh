@@ -6,7 +6,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -x .venv/bin/python ]]; then
-  echo "ERROR: AnimeDubber's .venv does not exist. Run ./setup.sh first."
+  echo "ERROR: DubCanvas's .venv does not exist. Run ./setup.sh first."
   exit 1
 fi
 
@@ -30,7 +30,7 @@ echo "Chatterbox pins its compatible PyTorch/torchaudio versions, so this step c
 if ! "$PY" -m pip install "chatterbox-tts>=0.1.7,<0.2"; then
   echo
   echo "WARNING: Chatterbox installation failed. Kokoro remains available."
-  echo "AnimeDubber will automatically fall back to Kokoro/macOS voices."
+  echo "DubCanvas will automatically fall back to Kokoro/macOS voices."
 fi
 
 echo
