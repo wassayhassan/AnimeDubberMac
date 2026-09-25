@@ -39,7 +39,8 @@ def faster_whisper_segments(
     model_name: str = "large-v3",
     device: str = "auto",
     compute_type: str = "auto",
-    language: str = "zh",
+    language: str | None = "zh",
+    language_sink: Callable[[str], None] | None = None,
     initial_prompt: str | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> List[Dict[str, Any]]:
@@ -57,7 +58,7 @@ def faster_whisper_segments(
         device=device or "auto",
         compute_type=compute_type or "auto",
     )
-    iterator, _info = model.transcribe(
+    iterator, info = model.transcribe(
         str(audio),
         language=language,
         task=task,
@@ -65,6 +66,8 @@ def faster_whisper_segments(
         word_timestamps=True,
         vad_filter=True,
     )
+    if language_sink and getattr(info, "language", None):
+        language_sink(str(info.language).lower())
 
     rows: List[Dict[str, Any]] = []
     for seg in iterator:

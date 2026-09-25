@@ -24,10 +24,16 @@ struct NewProjectView: View {
                     Section("Dub language") {
                         Picker("Language", selection: $state.targetLanguage) {
                             Text("English").tag("en")
-                            Text("Spanish · voice setup required").tag("es")
-                            Text("French · voice setup required").tag("fr")
-                            Text("German · voice setup required").tag("de")
-                            Text("Japanese · voice setup required").tag("ja")
+                            Text("Spanish").tag("es")
+                            Text("French").tag("fr")
+                            Text("German").tag("de")
+                            Text("Japanese").tag("ja")
+                            Text("Korean").tag("ko")
+                            Text("Chinese").tag("zh")
+                            Text("Portuguese").tag("pt")
+                            Text("Italian").tag("it")
+                            Text("Hindi").tag("hi")
+                            Text("Arabic").tag("ar")
                         }
                     }
                     DisclosureGroup("Project details (optional)", isExpanded: $detailsExpanded) {

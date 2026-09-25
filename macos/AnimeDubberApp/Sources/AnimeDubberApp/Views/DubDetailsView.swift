@@ -138,7 +138,7 @@ struct DubDetailsView: View {
                     if dub.status == "paused" && dub.error == "Subtitle review required before voice generation" {
                         GroupBox("Continue Paused Dub") {
                             VStack(alignment: .leading, spacing: 14) {
-                                Text("The updated app can resolve subtitle review and timing automatically. Continue this version without editing Chinese subtitles.")
+                                Text("The updated app can resolve subtitle review and timing automatically. Continue this version without editing source subtitles.")
                                     .foregroundStyle(.secondary)
                                 Button("Continue Automatically", systemImage: "play.fill") {
                                     state.resumeDub(dub)
@@ -175,13 +175,13 @@ struct DubDetailsView: View {
                                         }
                                         if !cue.error.isEmpty { Text(cue.error).font(.caption).foregroundStyle(.orange) }
                                         if cue.reasons.contains("non_chinese_source") {
-                                            Text("The two speech passes disagree. You don't need to read Chinese: compare the English options and the scene. The alternate is an uncertain guess, especially for a very short cue.")
+                                            Text("The two speech passes disagree. Compare the translated options and the scene. The alternate is an uncertain guess, especially for a very short cue.")
                                                 .font(.caption).foregroundStyle(.orange)
                                             if !cue.alternateEnglish.isEmpty {
-                                                Text("Alternate English possibility: \(cue.alternateEnglish)")
+                                                Text("Alternate translation: \(cue.alternateEnglish)")
                                                     .font(.callout).foregroundStyle(.orange)
                                                 if cue.alternateEnglish != cue.translation {
-                                                    Button("Use alternate English") {
+                                                    Button("Use alternate translation") {
                                                         reviewDraft[cue.id] = cue.alternateEnglish
                                                     }.buttonStyle(.link)
                                                 }
@@ -242,13 +242,13 @@ struct DubDetailsView: View {
                                 Text("Files appear here as each processing stage finishes.")
                                     .foregroundStyle(.secondary)
                             }
-                            ForEach(["english_srt", "target_srt", "chinese_srt", "english_vtt"], id: \.self) { kind in
+                            ForEach(["english_srt", "target_srt", "chinese_srt", "source_srt", "english_vtt"], id: \.self) { kind in
                                 if let path = dub.artifacts[kind] {
                                     ArtifactLink(title: kind.contains("chinese") ? "Original subtitles" : "Translated subtitles", path: path)
                                 }
                             }
                             DisclosureGroup("Technical files", isExpanded: $filesExpanded) {
-                            ForEach(dub.artifacts.keys.sorted().filter { !["dubbed_video", "english_srt", "target_srt", "chinese_srt", "english_vtt"].contains($0) }, id: \.self) { kind in
+                            ForEach(dub.artifacts.keys.sorted().filter { !["dubbed_video", "english_srt", "target_srt", "chinese_srt", "source_srt", "english_vtt"].contains($0) }, id: \.self) { kind in
                                 if let path = dub.artifacts[kind] {
                                     ArtifactLink(title: kind.replacingOccurrences(of: "_", with: " ").capitalized, path: path)
                                 }

@@ -25,7 +25,7 @@ echo "Installing Kokoro…"
 "$PY" -m pip install "kokoro>=0.9.4,<1" soundfile
 
 echo
-echo "Installing Chatterbox Turbo…"
+echo "Installing Chatterbox Turbo and Multilingual…"
 echo "Chatterbox pins its compatible PyTorch/torchaudio versions, so this step can take a while."
 if ! "$PY" -m pip install "chatterbox-tts>=0.1.7,<0.2"; then
   echo
@@ -42,11 +42,15 @@ for name, ok in premium_voice_status().items():
 PY
 
 echo
-echo "Running backend tests after voice-engine installation…"
-"$PY" -m unittest discover -s tests -v
+if [[ "${1:-}" != "--no-rebuild" ]]; then
+  echo "Running backend tests after voice-engine installation…"
+  "$PY" -m unittest discover -s tests -v
+fi
 
 echo
-if command -v swift >/dev/null 2>&1; then
+if [[ "${1:-}" == "--no-rebuild" ]]; then
+  echo "The app will be built by setup after this step."
+elif command -v swift >/dev/null 2>&1; then
   echo "Rebuilding the native app so its bundled backend includes the new voice engines…"
   /bin/zsh macos/package_app.sh --install
   echo "Updated the app at the location reported above."

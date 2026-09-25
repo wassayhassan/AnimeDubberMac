@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from anime_dubber.core import CommandRunner, Config, PipelineError, ReviewRequired, Segment, TimingOverlapError, run_pipeline
-from anime_dubber.review import review_subtitles
+from anime_dubber.review import review_subtitles, flags_for
 from anime_dubber.timing import TimingRewriter, usable_rewrite
 
 
@@ -20,6 +20,14 @@ def srt(texts):
 
 
 class ReviewTests(unittest.TestCase):
+    def test_review_understands_source_and_target_language(self):
+        spanish = {"start": 0.0, "end": 2.0, "text": "Hola amigo"}
+        english = {"start": 0.0, "end": 2.0, "text": "Hello friend"}
+        self.assertEqual(flags_for(spanish, english, "en", "es"), [])
+        self.assertNotIn("untranslated_text", flags_for(spanish, spanish, "es", "es"))
+        japanese = {"start": 0.0, "end": 2.0, "text": "こんにちは"}
+        self.assertIn("untranslated_source", flags_for(japanese, japanese, "en", "ja"))
+
     def test_auto_rewrite_measures_voice_and_finishes_without_review(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

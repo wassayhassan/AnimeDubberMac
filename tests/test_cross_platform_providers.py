@@ -16,11 +16,58 @@ from anime_dubber.providers.tts import (
     _prepare_chatterbox_watermarker,
     automatic_kokoro_voice,
     synthesize_chatterbox,
+    synthesize_multilingual_chatterbox,
     synthesize_piper,
 )
 
 
 class CrossPlatformProviderTests(unittest.TestCase):
+    def test_auto_source_detection_uses_provider_language(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = config_from_dict({"source": "input.mp4", "output_dir": td,
+                                    "asr": {"provider": "faster-whisper"}})
+            self.assertEqual(cfg.source_language, "auto")
+
+            def recognize(_audio, **kwargs):
+                self.assertIsNone(kwargs["language"])
+                kwargs["language_sink"]("es")
+                return [{"start": 0, "end": 1, "text": "Hola"}]
+
+            with patch("anime_dubber.providers.asr.faster_whisper_segments", side_effect=recognize):
+                segments = transcribe_audio(Path(td) / "voice.wav", cfg, Path(td), CommandRunner(), lambda _: None)
+            self.assertEqual(cfg.source_language, "es")
+            self.assertEqual(segments[0].text, "Hola")
+            self.assertEqual(json.loads((Path(td) / "detected_source_language.json").read_text())["language"], "es")
+            resumed = config_from_dict({"source": "input.mp4", "output_dir": td,
+                                        "asr": {"provider": "faster-whisper"}})
+            with patch("anime_dubber.providers.asr.faster_whisper_segments", side_effect=AssertionError("recached")):
+                cached = transcribe_audio(Path(td) / "voice.wav", resumed, Path(td), CommandRunner(), lambda _: None)
+            self.assertEqual((resumed.source_language, cached[0].text), ("es", "Hola"))
+
+    def test_multilingual_voice_sends_target_language_and_reference(self):
+        class FakeAudio:
+            def detach(self): return self
+            def cpu(self): return self
+
+        with tempfile.TemporaryDirectory() as td:
+            ref = Path(td) / "ref.wav"; ref.write_bytes(b"reference")
+            output = Path(td) / "dub.wav"
+            model = types.SimpleNamespace(sr=24000, generate=Mock(return_value=FakeAudio()))
+            fake_audio = types.SimpleNamespace(save=lambda path, _audio, _rate: Path(path).write_bytes(b"w" * 60))
+            fake_model = types.SimpleNamespace(ChatterboxMultilingualTTS=types.SimpleNamespace(
+                from_pretrained=Mock(return_value=model)))
+            with patch.dict("sys.modules", {"torchaudio": fake_audio, "chatterbox.mtl_tts": fake_model}), \
+                 patch("anime_dubber.providers.tts.multilingual_chatterbox_available", return_value=True), \
+                 patch("anime_dubber.providers.tts.reference_audio_duration", return_value=7.0), \
+                 patch("anime_dubber.providers.tts._best_torch_device", return_value="cpu"), \
+                 patch("anime_dubber.providers.tts._prepare_chatterbox_watermarker"), \
+                 patch.dict("anime_dubber.providers.tts._MULTILINGUAL_MODELS", {}, clear=True):
+                synthesize_multilingual_chatterbox("Hola", output, language="es", reference_audio=str(ref))
+            self.assertEqual(model.generate.call_args.kwargs["language_id"], "es")
+            self.assertEqual(model.generate.call_args.kwargs["cfg_weight"], 0.0)
+            self.assertEqual(fake_model.ChatterboxMultilingualTTS.from_pretrained.call_args.kwargs["t3_model"], "v3")
+            self.assertTrue(output.is_file())
+
     def test_chinese_reference_prefers_standard_model_for_american_english(self):
         class FakeAudio:
             def detach(self): return self

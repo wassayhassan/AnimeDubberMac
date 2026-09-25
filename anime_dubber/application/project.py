@@ -208,6 +208,8 @@ class ProjectStore:
             return
         path = str(path)
         payload.setdefault("artifacts", {})[kind] = path
+        if kind in {"source_srt", "chinese_srt"}:
+            payload["source_language"] = language
         if kind.endswith("_srt") or kind.endswith("_vtt") or kind == "review_report":
             key = f"{version_id}:{language}" if version_id else language
             subtitle = payload.setdefault("subtitles", {}).setdefault(key, {
@@ -217,6 +219,8 @@ class ProjectStore:
         for dub in payload.get("dubs", []):
             if dub.get("id") == dub_id:
                 dub.setdefault("artifacts", {})[kind] = path
+                if kind in {"source_srt", "chinese_srt"}:
+                    dub["source_language"] = language
         payload["updated_at"] = _now()
         _atomic_write(self.manifest_path, payload)
 
