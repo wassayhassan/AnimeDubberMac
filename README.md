@@ -7,12 +7,12 @@ DubCanvas creates subtitles and multilingual dubs for videos. The macOS app orga
 Requires an Apple silicon Mac running macOS 14 or later. Install FFmpeg if setup asks for it, then run:
 
 ```bash
-git clone https://github.com/wassayhassan/DubCanvas.git
-cd DubCanvas
+git clone https://github.com/wassayhassan/AnimeDubberMac.git
+cd AnimeDubberMac
 zsh setup.sh
 ```
 
-Setup installs dependencies, runs checks, and installs the app in `/Applications`. Open the app from Finder or Spotlight. The current installed app bundle is named `AnimeDubber.app`; this will be updated separately from the repository rename.
+Setup installs dependencies, runs checks, and installs the app in `/Applications`. Open the app from Finder or Spotlight. The installed app bundle is currently named `AnimeDubber.app`.
 
 1. Choose **New Project** and add a local video or video page URL.
 2. Choose a target language and start the first dub, or create the project with subtitles only.
