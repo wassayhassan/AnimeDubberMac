@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from anime_dubber.cli import build_parser
+from anime_dubber.cli import build_parser, default_output_dir
 
 
 class CliTests(unittest.TestCase):
+    def test_default_output_keeps_existing_projects(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "AnimeDubberOutput"
+            current = root / "DubCanvasOutput"
+            self.assertEqual(default_output_dir(root), str(current))
+            legacy.mkdir()
+            self.assertEqual(default_output_dir(root), str(legacy))
+            current.mkdir()
+            self.assertEqual(default_output_dir(root), str(current))
+
     def test_run_parser(self):
         args = build_parser().parse_args([
             "run",
