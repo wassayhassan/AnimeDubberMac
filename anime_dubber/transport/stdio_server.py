@@ -47,7 +47,7 @@ def serve() -> int:
 
             if method == "hello":
                 result = {
-                    "backend": "AnimeDubber",
+                    "backend": "DubCanvas",
                     "version": __version__,
                     "protocol_version": 1,
                 }

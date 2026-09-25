@@ -9,9 +9,9 @@ enum BackendProcessError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .backendNotFound:
-            "Could not locate the AnimeDubber Python backend."
+            "Could not locate the DubCanvas Python backend."
         case .runtimeNotFound(let detail):
-            "Could not locate a Python runtime for AnimeDubber. \(detail)"
+            "Could not locate a Python runtime for DubCanvas. \(detail)"
         case .processNotRunning:
             "The Python backend is not running."
         case .invalidRequest:

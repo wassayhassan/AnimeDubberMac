@@ -21,4 +21,4 @@ Write-Host "FFmpeg/ffprobe must also be available on PATH."
 Write-Host "For local Piper TTS, download a Piper .onnx voice model and pass --piper-model."
 Write-Host "Ollama is optional; install/start it separately if you want --translation ollama."
 Write-Host ""
-& $venvPython -m anime_dubber.cli doctor
+& $venvPython -m dubcanvas doctor

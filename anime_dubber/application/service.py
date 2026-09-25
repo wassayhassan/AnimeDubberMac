@@ -372,7 +372,7 @@ class ApplicationService:
         thread = threading.Thread(
             target=self._execute,
             args=(record, config, analysis),
-            name=f"AnimeDubber-{job_id}",
+            name=f"DubCanvas-{job_id}",
             daemon=True,
         )
         thread.start()
@@ -408,7 +408,7 @@ class ApplicationService:
         self._execute(record, config, analysis)
         snapshot = self.get_job(job_id)
         if snapshot["status"] == "failed":
-            raise RuntimeError(snapshot["error"] or "AnimeDubber job failed")
+            raise RuntimeError(snapshot["error"] or "DubCanvas job failed")
         if snapshot["status"] == "cancelled":
             raise CancelledError("Cancelled by user")
         return snapshot
@@ -455,7 +455,7 @@ class ApplicationService:
             self._jobs[job_id] = record
             self._project_stores[job_id] = store
         threading.Thread(target=self._execute, args=(record, config, False),
-                         name=f"AnimeDubber-{job_id}", daemon=True).start()
+                         name=f"DubCanvas-{job_id}", daemon=True).start()
         return job_id
 
     def approve_review(self, output_dir: str, project_id: str, dub_id: str,

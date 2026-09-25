@@ -310,7 +310,7 @@ macos/
   AnimeDubber/
     AnimeDubber.xcodeproj
     AnimeDubber/
-      AnimeDubberApp.swift
+      DubCanvasApp.swift
       AppState.swift
 
       Models/

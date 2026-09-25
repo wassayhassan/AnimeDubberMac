@@ -27,4 +27,4 @@ for x, top, bottom in ((274, 518, 556), (320, 489, 583), (366, 519, 558), (658, 
     draw.line((x, top, x, bottom), fill=(174, 239, 255, 255), width=20)
     draw.ellipse((x - 10, top - 10, x + 10, top + 10), fill=(174, 239, 255, 255))
     draw.ellipse((x - 10, bottom - 10, x + 10, bottom + 10), fill=(174, 239, 255, 255))
-image.save(Path(__file__).with_name("AnimeDubberIcon.png"))
+image.save(Path(__file__).with_name("DubCanvasIcon.png"))

@@ -34,7 +34,7 @@ struct RootView: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationTitle("AnimeDubber")
+            .navigationTitle("DubCanvas")
             .navigationSplitViewColumnWidth(min: 205, ideal: 235, max: 290)
         } detail: {
             detail
@@ -121,7 +121,7 @@ private struct SystemCheckSheet: View {
                 }
             }
             if state.systemCheckItems.contains(where: { !$0.ok && !$0.optional }) {
-                Text("Setup is incomplete. Run the project's setup.sh from Terminal, then reopen AnimeDubber and run System Check again. This installs video tools and Python dependencies.")
+                Text("Setup is incomplete. Run the project's setup.sh from Terminal, then reopen DubCanvas and run System Check again. This installs video tools and Python dependencies.")
                     .font(.callout)
             }
         }

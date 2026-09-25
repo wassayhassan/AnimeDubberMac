@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "AnimeDubberApp",
+    name: "DubCanvasApp",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "AnimeDubberApp", targets: ["AnimeDubberApp"])
+        .executable(name: "DubCanvasApp", targets: ["DubCanvasApp"])
     ],
     targets: [
         .executableTarget(
-            name: "AnimeDubberApp",
-            path: "Sources/AnimeDubberApp",
+            name: "DubCanvasApp",
+            path: "Sources/DubCanvasApp",
             linkerSettings: [
                 .linkedFramework("Security")
             ]

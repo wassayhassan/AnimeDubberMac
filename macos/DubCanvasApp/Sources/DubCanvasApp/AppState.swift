@@ -12,7 +12,7 @@ final class AppState: ObservableObject {
     @Published var dubName = ""
     @Published var versionVoiceOverrides: [String: [String: String]] = [:]
     @Published var targetLanguage = "en"
-    @Published var outputFolder = "~/Movies/AnimeDubber"
+    @Published var outputFolder = "~/Movies/DubCanvas"
     @Published var seriesID = ""
     @Published var outputMode: OutputMode = .dub
 
