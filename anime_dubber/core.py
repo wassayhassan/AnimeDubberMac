@@ -169,6 +169,7 @@ class Config:
     speaker_backend: str = "auto"  # auto|ecapa|acoustic
     review_before_dub: bool = True
     review_model: str = "mlx-community/Qwen3-8B-4bit"
+    voice_overrides: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
 
 class CommandRunner:
@@ -2060,6 +2061,16 @@ def _profile_dict(profiles) -> Dict[str, dict]:
     return {p.id: p.to_dict() for p in profiles}
 
 
+def _version_profiles(profiles, overrides: Dict[str, Dict[str, str]]) -> Dict[str, dict]:
+    """Apply dub-only voice choices without changing project speaker profiles."""
+    result = _profile_dict(profiles)
+    permitted = {"tts_provider", "macos_voice", "kokoro_voice", "reference_audio", "elevenlabs_voice_id"}
+    for speaker_id, choices in overrides.items():
+        if speaker_id in result:
+            result[speaker_id].update({key: value for key, value in choices.items() if key in permitted})
+    return result
+
+
 def analyze_only(config: Config, progress: Optional[ProgressCallback] = None, runner: Optional[CommandRunner] = None) -> Dict[str, Path]:
     progress = progress or print
     runner = runner or CommandRunner(progress)
@@ -2286,13 +2297,16 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                     seg.style_confidence = candidates[0].style_confidence
         payload["characters"] = [p.to_dict() for p in profiles]
         write_character_map(payload, char_path)
-        profile_map = _profile_dict(profiles)
+        profile_map = _version_profiles(profiles, config.voice_overrides)
         progress(f"Character map: {char_path}")
 
     if profiles:
         snapshot_map = version_dir / f"{key}_characters.json" if config.version_id else char_path
         if snapshot_map != char_path:
-            shutil.copy2(char_path, snapshot_map)
+            from .characters import write_character_map
+            snapshot_payload = dict(payload)
+            snapshot_payload["characters"] = list(profile_map.values())
+            write_character_map(snapshot_payload, snapshot_map)
         results["character_map"] = snapshot_map
         publish("character_map", snapshot_map, config.target_language)
 

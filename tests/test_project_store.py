@@ -11,6 +11,31 @@ from anime_dubber.application.service import ApplicationService
 
 
 class ProjectStoreTests(unittest.TestCase):
+    def test_source_revisions_are_reused_and_existing_dubs_keep_their_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            store = ProjectStore(out, "source.mp4")
+            store.create(source="source.mp4")
+            source_srt = out / "source.srt"
+            source_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+            store.begin(job_id="job_1", kind="run", config={"source": "source.mp4"}, dub_id="dub_1")
+            store.publish_artifact("source_srt", str(source_srt), dub_id="dub_1", version_id="dub_1")
+            first = store.load()
+            self.assertEqual(first["analysis_revision"], 1)
+            self.assertIn("source:en", first["subtitles"])
+            self.assertEqual(first["dubs"][0]["analysis_revision"], 1)
+            store.finish(status="completed")
+
+            store.begin(job_id="job_2", kind="run", config={"source": "source.mp4"}, dub_id="dub_2")
+            store.publish_artifact("source_srt", str(source_srt), dub_id="dub_2", version_id="dub_2")
+            self.assertEqual(store.load()["analysis_revision"], 1)
+            self.assertEqual(list(store.load()["subtitles"]), ["source:en"])
+            source_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nCorrected\n")
+            store.publish_artifact("source_srt", str(source_srt), dub_id="dub_2", version_id="dub_2")
+            updated = store.load()
+            self.assertEqual(updated["analysis_revision"], 2)
+            self.assertEqual([d["analysis_revision"] for d in updated["dubs"]], [1, 2])
+
     def test_manifest_lifecycle_and_redaction(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)

@@ -4,6 +4,33 @@ struct NewDubView: View {
     @EnvironmentObject private var state: AppState
     @State private var advancedExpanded = false
     @State private var pipelineExpanded = false
+    @State private var voiceChoicesExpanded = false
+
+    private var configurationProblem: String? {
+        if state.outputMode == .dub && state.targetLanguage != "en" {
+            if state.translationProvider == .whisper {
+                return "Whisper direct translation only supports English. Choose a local LLM or Ollama."
+            }
+            if ![VoiceProvider.auto, .chatterbox, .elevenlabs].contains(state.voiceProvider) {
+                return "This language needs Chatterbox Multilingual or ElevenLabs voices."
+            }
+            let multilingual = state.availableProviders["tts"]?["chatterbox_multilingual"] == true
+            let hasKey = !state.elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if state.voiceProvider == .chatterbox && !multilingual {
+                return "Install Chatterbox Multilingual or choose ElevenLabs for this language."
+            }
+            if state.voiceProvider == .auto && !multilingual && !hasKey {
+                return "Install Chatterbox Multilingual or add an ElevenLabs API key in Settings."
+            }
+            if state.voiceProvider == .elevenlabs && !hasKey {
+                return "Add an ElevenLabs API key in Settings before starting."
+            }
+        }
+        if state.outputMode == .dub && state.reviewBeforeDub && state.translationProvider == .whisper {
+            return "Automatic subtitle review needs a local translation model."
+        }
+        return nil
+    }
 
     var body: some View {
         ScrollView {
@@ -17,6 +44,15 @@ struct NewDubView: View {
                 DisclosureGroup("Advanced processing settings", isExpanded: $pipelineExpanded) {
                     pipelineSection
                 }
+                if state.outputMode == .dub {
+                    DisclosureGroup("Speaker voices for this version", isExpanded: $voiceChoicesExpanded) {
+                        voiceChoices
+                    }
+                }
+                if let configurationProblem {
+                    Label(configurationProblem, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
                 actions
             }
             .frame(maxWidth: 860, alignment: .leading)
@@ -24,6 +60,7 @@ struct NewDubView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .navigationTitle("New Dub")
+        .onAppear { state.refreshCharacterMaps() }
     }
 
     private var header: some View {
@@ -33,6 +70,15 @@ struct NewDubView: View {
             Text("\(state.currentProject?.displayName ?? "Open a project") · \(state.source)")
                 .font(.title3)
                 .foregroundStyle(.secondary)
+            if let project = state.currentProject {
+                Label("Reuses this project's source video, transcript, speaker identities and source subtitle timing. Translation, voices and output belong to the new version.", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if project.status == "running" {
+                    Label("Source analysis is running. The new version can use it after it finishes.", systemImage: "hourglass")
+                        .font(.caption)
+                }
+            }
         }
     }
 
@@ -43,14 +89,6 @@ struct NewDubView: View {
                     Text("Project")
                         .foregroundStyle(.secondary)
                     Text(state.currentProject?.displayName ?? "No project selected")
-                }
-                GridRow {
-                    Text("Create")
-                        .foregroundStyle(.secondary)
-                    Picker("Create", selection: $state.outputMode) {
-                        ForEach(OutputMode.allCases) { mode in Text(mode.title).tag(mode) }
-                    }
-                    .labelsHidden()
                 }
                 GridRow {
                     Text("Language")
@@ -77,6 +115,12 @@ struct NewDubView: View {
                 }
             }
             .padding(.top, 4)
+            if state.outputMode == .dub {
+                Divider().padding(.vertical, 10)
+                Label("Automatic setup: detect source speech, review subtitles, match speakers, preserve background audio and generate target voices. Provider overrides are below.", systemImage: "sparkles")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -294,9 +338,55 @@ struct NewDubView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!state.canStartJob || (state.reviewBeforeDub && state.outputMode == .dub && state.translationProvider == .whisper) || (state.targetLanguage != "en" &&
-                (state.translationProvider == .whisper || (state.outputMode == .dub && state.voiceProvider != .elevenlabs))))
+            .disabled(!state.canStartJob || configurationProblem != nil)
         }
+    }
+
+    private var voiceChoices: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Optional overrides for this dub only. Speaker identities stay shared; completed versions keep their own voice choices.")
+                .font(.caption).foregroundStyle(.secondary)
+            if state.characters.isEmpty {
+                Text("Speakers will be detected automatically. You can inspect project speakers after analysis.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(state.characters) { speaker in
+                GroupBox(speaker.displayName) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Voice engine", selection: voiceChoice(speaker.id, key: "tts_provider", defaultValue: "inherit")) {
+                            Text("Automatic / project speaker voice").tag("inherit")
+                            Text("Chatterbox").tag("chatterbox")
+                            if state.targetLanguage == "en" {
+                                Text("Kokoro").tag("kokoro")
+                                Text("macOS Voice").tag("macos")
+                            }
+                            Text("ElevenLabs").tag("elevenlabs")
+                        }
+                        let provider = state.versionVoiceOverrides[speaker.id]?["tts_provider"] ?? "inherit"
+                        if provider == "kokoro" {
+                            TextField("Kokoro preset (e.g. am_adam)", text: voiceChoice(speaker.id, key: "kokoro_voice", defaultValue: speaker.kokoroVoice))
+                        } else if provider == "macos" {
+                            TextField("macOS voice name", text: voiceChoice(speaker.id, key: "macos_voice", defaultValue: speaker.macosVoice))
+                        } else if provider == "chatterbox" {
+                            TextField("Reference audio path (optional)", text: voiceChoice(speaker.id, key: "reference_audio", defaultValue: ""))
+                        } else if provider == "elevenlabs" {
+                            TextField("ElevenLabs voice ID (optional)", text: voiceChoice(speaker.id, key: "elevenlabs_voice_id", defaultValue: ""))
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }.padding(.top, 8)
+    }
+
+    private func voiceChoice(_ speakerID: String, key: String, defaultValue: String) -> Binding<String> {
+        Binding(
+            get: { state.versionVoiceOverrides[speakerID]?[key] ?? defaultValue },
+            set: { value in
+                var choices = state.versionVoiceOverrides[speakerID] ?? [:]
+                choices[key] = value
+                state.versionVoiceOverrides[speakerID] = choices
+            }
+        )
     }
 
     private func settingRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

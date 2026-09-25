@@ -8,6 +8,7 @@ struct DubDetailsView: View {
     @State private var player: AVPlayer?
     @State private var sourceCuePlayer: AVPlayer?
     @State private var confirmDelete = false
+    @State private var showingExport = false
     @State private var advancedExpanded = false
     @State private var configExpanded = false
     @State private var reviewExpanded = false
@@ -71,7 +72,7 @@ struct DubDetailsView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                         if let path = dub.artifacts["dubbed_video"] {
                             HStack {
-                                Button("Save Video…", systemImage: "square.and.arrow.down") { exportFile(path) }
+                                Button("Export…", systemImage: "square.and.arrow.up") { showingExport = true }
                                     .buttonStyle(.borderedProminent)
                                 Button("Show in Finder", systemImage: "folder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
@@ -92,6 +93,11 @@ struct DubDetailsView: View {
                         }
                     }
 
+                    if dub.artifacts["translated_srt"] != nil || dub.artifacts["english_srt"] != nil,
+                       player == nil {
+                        Button("Export Available Subtitles…", systemImage: "captions.bubble") { showingExport = true }
+                    }
+
                     if dub.status == "completed" && player != nil {
                         GroupBox("Result") {
                             VStack(alignment: .leading, spacing: 6) {
@@ -101,6 +107,11 @@ struct DubDetailsView: View {
                                     "Processing finished with \(dub.warnings.count) note(s), including \(dub.warnings.filter { $0.localizedCaseInsensitiveContains("overlap") || $0.localizedCaseInsensitiveContains("timing") }.count) about timing. Review them below if the video needs adjustment.")
                                     .foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    if dub.artifacts["review_report"] != nil {
+                        Button("Review Subtitle and Timing Notes", systemImage: "text.magnifyingglass") {
+                            state.selection = .review(dub.id)
                         }
                     }
                     DisclosureGroup("Processing and voice details", isExpanded: $advancedExpanded) {
@@ -127,8 +138,7 @@ struct DubDetailsView: View {
                                     Label(assignment, systemImage: "person.wave.2")
                                         .font(.caption)
                                 }
-                                Button("Edit Current Character Voices") {
-                                    state.loadCharacterMap(path)
+                                Button("View Project Speakers") {
                                     state.selection = .characters
                                 }
                             }
@@ -307,6 +317,10 @@ struct DubDetailsView: View {
                 } message: {
                     Text("This removes this dub's version folder. Shared source media and other dubs stay in the project.")
                 }
+                .sheet(isPresented: $showingExport) {
+                    DubExportView(projectName: state.currentProject?.displayName ?? "Project", dub: dub)
+                        .frame(minWidth: 520)
+                }
                 .onAppear { loadPlayer(dub); loadReview(dub) }
                 .onChange(of: dubID) { _, _ in loadPlayer(dub); loadReview(dub) }
                 .onChange(of: dub.artifacts["dubbed_video"]) { _, _ in
@@ -423,7 +437,7 @@ struct DubDetailsView: View {
 // appears. On affected macOS versions that framework aborts while creating
 // class metadata. The AppKit player avoids that bridge and keeps playback
 // controls inside the project workspace.
-private struct NativeDubPlayer: NSViewRepresentable {
+struct NativeDubPlayer: NSViewRepresentable {
     let player: AVPlayer
 
     func makeNSView(context: Context) -> AVPlayerView {

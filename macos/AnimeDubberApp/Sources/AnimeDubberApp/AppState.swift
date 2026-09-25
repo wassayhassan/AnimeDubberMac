@@ -10,6 +10,7 @@ final class AppState: ObservableObject {
     @Published var source = ""
     @Published var projectName = ""
     @Published var dubName = ""
+    @Published var versionVoiceOverrides: [String: [String: String]] = [:]
     @Published var targetLanguage = "en"
     @Published var outputFolder = "~/Movies/AnimeDubber"
     @Published var seriesID = ""
@@ -79,6 +80,7 @@ final class AppState: ObservableObject {
     @Published var systemCheckItems: [SystemCheckItem] = []
     @Published var showingSystemCheck = false
     @Published var settingsShowProviders = false
+    @Published var availableProviders: [String: [String: Bool]] = [:]
 
     @Published var projects: [ProjectSummary] = []
     @Published var selectedProjectID: String?
@@ -357,7 +359,7 @@ final class AppState: ObservableObject {
         jobIssueDetail = ""
         startPending = true
         pendingQuickStart = true
-        selection = .processing
+        selection = .newProject
         statusText = "Checking your setup…"
         do {
             _ = try backend.send(method: "system_check", id: "quick-system-check-\(UUID().uuidString)")
@@ -373,7 +375,7 @@ final class AppState: ObservableObject {
         jobIssue = message
         jobIssueDetail = message
         statusText = "Could not start"
-        selection = .processing
+        selection = selectedProjectID == nil ? .newProject : .overview
     }
 
     func startJob(analysis: Bool) {
@@ -437,6 +439,7 @@ final class AppState: ObservableObject {
             "resume": resumeCachedWork,
             "review_before_dub": reviewBeforeDub,
             "review_model": reviewModel,
+            "voice_overrides": versionVoiceOverrides,
         ]
 
         do {
@@ -453,7 +456,8 @@ final class AppState: ObservableObject {
                 params: params,
                 id: id
             )
-            if !analysis { selection = .processing }
+            versionVoiceOverrides = [:]
+            if !analysis { selection = .overview }
             openSubtitlesOnFinish = !analysis && outputMode == .subtitles
             subtitlesJobFinished = false
         } catch {
@@ -462,7 +466,7 @@ final class AppState: ObservableObject {
             activity.append(ActivityEntry(kind: .error, message: error.localizedDescription))
             statusText = "Could not start"
             jobIssue = error.localizedDescription
-            if !analysis { selection = .processing }
+            if !analysis { selection = .overview }
         }
     }
 
@@ -495,13 +499,13 @@ final class AppState: ObservableObject {
                 "dub_id": dub.id,
                 "elevenlabs_api_key": elevenLabsAPIKey,
             ], id: "resume-\(UUID().uuidString)")
-            selection = .processing
+            selection = .overview
         } catch {
             jobStartPending = false
             awaitingDubJob = false
             statusText = error.localizedDescription
             jobIssue = error.localizedDescription
-            selection = .processing
+            selection = .overview
         }
     }
 
@@ -558,12 +562,19 @@ final class AppState: ObservableObject {
     }
 
     func openProject(_ project: ProjectSummary) {
+        if characterMaps.first(where: { $0.path == selectedCharacterMapPath })?.sourceKey != project.id {
+            versionVoiceOverrides = [:]
+            selectedCharacterMapPath = nil
+            characters = []
+            jobIssue = ""
+        }
         selectedProjectID = project.id
         source = project.source
         outputFolder = project.outputDir
         seriesID = project.seriesID
         projectName = project.name
         selection = .overview
+        refreshCharacterMaps()
     }
 
     func newProject() {
@@ -571,6 +582,7 @@ final class AppState: ObservableObject {
         source = ""
         projectName = ""
         dubName = ""
+        versionVoiceOverrides = [:]
         seriesID = ""
         seriesContext = ""
         jobIssue = ""
@@ -587,6 +599,7 @@ final class AppState: ObservableObject {
         targetLanguage = dub.language
         dubName = dub.name + " (new version)"
         let config = dub.config
+        versionVoiceOverrides = config["voice_overrides"] as? [String: [String: String]] ?? [:]
         translationProvider = TranslationProvider(rawValue: config["translation"] as? String ?? "") ?? translationProvider
         voiceProvider = VoiceProvider(rawValue: config["tts_engine"] as? String ?? "") ?? voiceProvider
         asrProvider = ASRProvider(rawValue: config["asr_provider"] as? String ?? "") ?? asrProvider
@@ -832,7 +845,7 @@ final class AppState: ObservableObject {
                 awaitingDubJob = false
                 jobIssue = message
                 jobIssueDetail = message
-                if !id.hasPrefix("analyze-") { selection = .processing }
+                if !id.hasPrefix("analyze-") { selection = .overview }
             }
             if id.hasPrefix("save-character-") {
                 characterSaveMessage = message
@@ -854,6 +867,10 @@ final class AppState: ObservableObject {
 
         case "voices":
             installedVoices = resultAny as? [String] ?? []
+
+        case "capabilities":
+            let providers = result["providers"] as? [String: Any] ?? [:]
+            availableProviders = providers.compactMapValues { $0 as? [String: Bool] }
 
         case "system-check":
             let checks = result["checks"] as? [[String: Any]] ?? []
@@ -928,7 +945,7 @@ final class AppState: ObservableObject {
                     awaitingDubJob = false
                     jobIssue = "The processing service did not return a job ID. Reconnect and try again."
                     statusText = "Could not start"
-                    selection = .processing
+                    selection = .overview
                 }
             } else if id.hasPrefix("projects-") {
                 let rows = resultAny as? [[String: Any]] ?? []
@@ -940,13 +957,13 @@ final class AppState: ObservableObject {
                     startPending = false
                     outputMode = .dub
                     startJob(analysis: false)
-                    selection = .processing
+                    selection = .overview
                 }
                 if let openResultForJobID,
                    let project = projects.first(where: { $0.dubs.contains(where: { $0.jobID == openResultForJobID && $0.status != "running" }) }),
                    let dub = project.dubs.first(where: { $0.jobID == openResultForJobID }) {
                     self.openResultForJobID = nil
-                    if selection == .processing {
+                    if selection == .overview && selectedProjectID == project.id {
                         selectedProjectID = project.id
                         selection = .dub(dub.id)
                     }
@@ -954,7 +971,7 @@ final class AppState: ObservableObject {
                 if openSubtitlesOnFinish && subtitlesJobFinished {
                     openSubtitlesOnFinish = false
                     subtitlesJobFinished = false
-                    if selection == .processing { selection = .subtitles }
+                    if selection == .overview { selection = .subtitles }
                 }
                 if let pendingReviewJobID {
                     if let waiting = currentProject?.dubs.first(where: { $0.jobID == pendingReviewJobID && $0.status == "paused" && $0.error == "Subtitle review required before voice generation" }) {
@@ -981,6 +998,7 @@ final class AppState: ObservableObject {
                         return
                     }
                     statusText = "Preparing dub…"
+                    selection = .overview
                 } else {
                     selection = .overview
                 }
@@ -994,10 +1012,11 @@ final class AppState: ObservableObject {
             } else if id.hasPrefix("character-maps-") {
                 let rows = resultAny as? [[String: Any]] ?? []
                 characterMaps = rows.compactMap(CharacterMapSummary.init(dictionary:))
+                let scoped = characterMaps.filter { $0.sourceKey == selectedProjectID }
                 if let selected = selectedCharacterMapPath,
-                   characterMaps.contains(where: { $0.path == selected }) {
+                   scoped.contains(where: { $0.path == selected }) {
                     loadCharacterMap(selected)
-                } else if let first = characterMaps.first {
+                } else if let first = scoped.first {
                     loadCharacterMap(first.path)
                 } else {
                     selectedCharacterMapPath = nil
@@ -1021,6 +1040,7 @@ final class AppState: ObservableObject {
                 }
                 characterSaveMessage = "Saved"
                 activity.append(ActivityEntry(kind: .info, message: "Saved character voice override."))
+                refreshProjects()
             }
         }
     }
@@ -1091,8 +1111,8 @@ final class AppState: ObservableObject {
             refreshProjects()
             refreshCharacterMaps()
             if showVoices {
-                selection = .characters
-                statusText = "Review source voice clips before creating the dub"
+                selection = .overview
+                statusText = "Source analysis ready"
             }
 
         default:

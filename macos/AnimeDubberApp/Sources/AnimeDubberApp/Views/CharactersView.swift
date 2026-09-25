@@ -3,17 +3,20 @@ import SwiftUI
 
 struct CharactersView: View {
     @EnvironmentObject private var state: AppState
+    private var projectMaps: [CharacterMapSummary] {
+        state.characterMaps.filter { $0.sourceKey == state.selectedProjectID }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             mapToolbar
             Divider()
 
-            if state.characterMaps.isEmpty {
+            if projectMaps.isEmpty {
                 ContentUnavailableView {
-                    Label("No Character Analysis Yet", systemImage: "person.2")
+                    Label("No Speakers Yet", systemImage: "person.2")
                 } description: {
-                    Text("Run Analyze Characters for a video in the current output folder.")
+                    Text("Speakers appear here after this project's source video is analyzed.")
                 } actions: {
                     Button("Refresh") {
                         state.refreshCharacterMaps()
@@ -81,7 +84,7 @@ struct CharactersView: View {
                 }
             }
         }
-        .navigationTitle("Characters")
+        .navigationTitle("Speakers")
         .toolbar {
             Button {
                 state.refreshCharacterMaps()
@@ -107,7 +110,7 @@ struct CharactersView: View {
 
     private var mapToolbar: some View {
         HStack(spacing: 10) {
-            Text("Character Map")
+            Text("Project Speakers")
                 .fontWeight(.medium)
 
             Picker("Character Map", selection: Binding(
@@ -118,7 +121,7 @@ struct CharactersView: View {
                     }
                 }
             )) {
-                ForEach(state.characterMaps) { map in
+                ForEach(projectMaps) { map in
                     Text("\(map.displayName) · \(map.characterCount) characters")
                         .tag(map.path)
                 }
@@ -128,7 +131,7 @@ struct CharactersView: View {
 
             Spacer()
 
-            if let map = state.characterMaps.first(where: { $0.path == state.selectedCharacterMapPath }) {
+            if let map = projectMaps.first(where: { $0.path == state.selectedCharacterMapPath }) {
                 Text(map.speakerBackend.isEmpty ? "Speaker analysis" : map.speakerBackend)
                     .font(.caption)
                     .foregroundStyle(.secondary)

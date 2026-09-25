@@ -94,6 +94,17 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
     if tts_provider == "macos_say":
         tts_provider = "macos"
 
+    raw_voice_overrides = data.get("voice_overrides") or {}
+    if not isinstance(raw_voice_overrides, dict):
+        raise ValueError("Voice overrides must be a speaker-to-settings mapping")
+    allowed_voice_fields = {"tts_provider", "macos_voice", "kokoro_voice", "reference_audio", "elevenlabs_voice_id"}
+    voice_overrides = {}
+    for speaker_id, settings in raw_voice_overrides.items():
+        if not isinstance(speaker_id, str) or not isinstance(settings, dict):
+            raise ValueError("Voice overrides require speaker IDs and settings")
+        voice_overrides[speaker_id] = {key: value for key, value in settings.items()
+                                       if key in allowed_voice_fields and isinstance(value, str)}
+
     threshold = speaker.get("threshold", data.get("speaker_threshold", 0.0))
     if threshold is None:
         threshold = 0.0
@@ -148,6 +159,7 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         elevenlabs_api_key=str(tts.get("api_key", data.get("elevenlabs_api_key", "")) or ""),
         elevenlabs_voice_id=str(tts.get("voice_id", data.get("elevenlabs_voice_id", "JBFqnCBsd6RMkjVDRZzb")) or ""),
         elevenlabs_model_id=str(tts.get("model_id", data.get("elevenlabs_model_id", "eleven_v3")) or ""),
+        voice_overrides=voice_overrides,
         multi_character=bool(speaker.get("enabled", data.get("multi_character", True))),
         max_speakers=max(2, int(speaker.get("max_speakers", data.get("max_speakers", 12)))),
         speaker_threshold=max(0.0, float(threshold)),
@@ -656,6 +668,13 @@ class ApplicationService:
             raise ValueError("character_id is required")
         from ..characters import update_character_override
         saved = update_character_override(Path(path).expanduser(), character_id, updates)
+        character_path = Path(path).expanduser().resolve()
+        key = character_path.name.removesuffix("_characters.json")
+        if character_path.name.endswith("_characters.json"):
+            store = ProjectStore(character_path.parent, "placeholder")
+            store.project_id = key
+            store.manifest_path = store.root / "projects" / f"{key}.json"
+            store.record_shared_analysis("character_map", str(character_path))
         self._emit(AppEvent("character_updated", {"path": str(path), "character": saved}))
         return saved
 

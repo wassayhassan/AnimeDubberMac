@@ -9,15 +9,22 @@ struct RootView: View {
                 Section("Library") {
                     sidebarRow(.projects)
                     sidebarRow(.newProject)
-                    if state.activeJobID != nil || state.startPending || state.jobStartPending { sidebarRow(.processing) }
                 }
 
                 if let project = state.currentProject {
                     Section(project.displayName) {
                         sidebarRow(.overview)
+                        sidebarRow(.media)
                         sidebarRow(.subtitles)
+                        sidebarRow(.characters)
                         sidebarRow(.dubs)
                         sidebarRow(.newDub)
+                        ForEach(project.dubs) { dub in
+                            Label(dub.title, systemImage: dub.status == "completed" ? "checkmark.circle" : "waveform.circle")
+                                .lineLimit(1)
+                                .padding(.leading, 12)
+                                .tag(SidebarDestination.dub(dub.id))
+                        }
                     }
                 }
 
@@ -34,6 +41,11 @@ struct RootView: View {
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
                         backendBadge
+                        if state.activeJobID != nil || state.startPending || state.jobStartPending {
+                            Button { state.selection = state.currentProject == nil ? .projects : .overview } label: {
+                                Label(state.statusText, systemImage: "hourglass")
+                            }.help("Show project progress")
+                        }
                         Button { state.runSystemCheck() } label: {
                             Label("System Check", systemImage: "stethoscope")
                         }
@@ -62,9 +74,11 @@ struct RootView: View {
         switch state.selection ?? .projects {
         case .projects: ProjectsView()
         case .newProject: NewProjectView()
-        case .processing: ProcessingView()
-        case .overview, .media, .subtitles, .dubs: ProjectWorkspaceView()
+        case .processing: ProjectWorkspaceView()
+        case .overview, .media, .dubs: ProjectWorkspaceView()
+        case .subtitles: ProjectSubtitlesView()
         case .dub(let id): DubDetailsView(dubID: id)
+        case .review(let id): DubReviewView(dubID: id)
         case .newDub, .newSubtitles: NewDubView()
         case .characters: CharactersView()
         case .projectSettings: ProjectSettingsView()
