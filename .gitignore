@@ -16,4 +16,4 @@ __pycache__/
 *.log
 # Native macOS build products
 dist/
-macos/AnimeDubberApp/.build/
+macos/DubCanvasApp/.build/

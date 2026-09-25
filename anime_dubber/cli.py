@@ -13,6 +13,15 @@ from .core import DEFAULT_CONTEXT
 from .languages import TARGET_LANGUAGES
 
 
+def default_output_dir(base: Path | None = None) -> str:
+    root = base or Path.cwd()
+    current = root / "DubCanvasOutput"
+    legacy = root / "AnimeDubberOutput"
+    if not current.exists() and legacy.is_dir():
+        return str(legacy)
+    return str(current)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dubcanvas",
@@ -25,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_job_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("source", help="YouTube URL or local video path")
-        p.add_argument("-o", "--output", default=str(Path.cwd() / "DubCanvasOutput"))
+        p.add_argument("-o", "--output", default=default_output_dir())
         p.add_argument("--series-id", default="")
         p.add_argument("--target-language", choices=list(TARGET_LANGUAGES), default="en")
         p.add_argument("--source-language", default="auto", help="Source language code, or auto to detect it")
@@ -95,23 +104,23 @@ def build_parser() -> argparse.ArgumentParser:
     caps.add_argument("--json", action="store_true")
 
     projects = sub.add_parser("projects", help="List source projects and their dub versions")
-    projects.add_argument("-o", "--output", default=str(Path.cwd() / "DubCanvasOutput"))
+    projects.add_argument("-o", "--output", default=default_output_dir())
     create = sub.add_parser("new-project", help="Register a source video before processing")
     create.add_argument("source")
-    create.add_argument("-o", "--output", default=str(Path.cwd() / "DubCanvasOutput"))
+    create.add_argument("-o", "--output", default=default_output_dir())
     create.add_argument("--name", default="")
     create.add_argument("--series-id", default="")
     retry = sub.add_parser("resume-dub", help="Resume a paused or failed dub in place")
     retry.add_argument("project_id")
     retry.add_argument("dub_id")
-    retry.add_argument("-o", "--output", default=str(Path.cwd() / "DubCanvasOutput"))
+    retry.add_argument("-o", "--output", default=default_output_dir())
     retry.add_argument("--elevenlabs-api-key", default="")
     retry.add_argument("--json", action="store_true")
 
     approve = sub.add_parser("approve-review", help="Approve a paused dub's subtitle review and optionally apply cue edits")
     approve.add_argument("project_id")
     approve.add_argument("dub_id")
-    approve.add_argument("-o", "--output", default=str(Path.cwd() / "DubCanvasOutput"))
+    approve.add_argument("-o", "--output", default=default_output_dir())
     approve.add_argument("--revisions", type=Path, help="Optional JSON object mapping 1-based cue numbers to approved text")
 
     review = sub.add_parser("review-subtitles", help="Flag suspicious cues in an existing SRT pair and optionally propose fixes with a larger local model")

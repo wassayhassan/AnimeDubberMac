@@ -29,7 +29,7 @@ Chatterbox and Kokoro provide local voices; ElevenLabs is optional and requires 
 
 ## Command line
 
-The Python CLI also runs on macOS, Windows, and Linux. Install FFmpeg and ffprobe first. On Linux, run `bash setup-cross-platform.sh`; on Windows, run `.\\setup-cross-platform.ps1` in PowerShell.
+The Python CLI also runs on macOS, Windows, and Linux. Install FFmpeg and ffprobe first. On Linux, run `bash setup-cross-platform.sh`; on Windows, run `.\setup-cross-platform.ps1` in PowerShell.
 
 ```bash
 python -m dubcanvas doctor
@@ -39,6 +39,7 @@ python -m dubcanvas projects -o ./output
 ```
 
 Run `python -m dubcanvas --help` for more commands and options. The old `python -m anime_dubber.cli` entry point still works with existing scripts.
+If an existing `AnimeDubberOutput` folder is present, the CLI continues using it by default. Pass `-o` to choose another folder.
 
 ## Notes
 
