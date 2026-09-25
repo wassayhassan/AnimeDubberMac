@@ -2,7 +2,7 @@
 
 The next workspace version uses **Project → Source → Subtitles → Dub versions → Outputs**. See [project workspace design and migration](docs/PROJECT_WORKSPACE_VNEXT.md) for the UI audit, versioned output structure, legacy migration and language/provider limits.
 
-AnimeDubber turns Chinese animation / manhua-drama videos into English-subtitled or English-dubbed videos while preserving the original soundtrack as much as possible.
+AnimeDubber transcribes spoken video in a detected source language and makes subtitles and dubs in a selected target language while preserving the soundtrack as much as possible. The macOS app offers English, Spanish, French, German, Japanese, Korean, Chinese, Portuguese, Italian, Hindi, and Arabic as output languages.
 
 The architecture is now:
 
@@ -65,7 +65,7 @@ Open it normally from Finder or Spotlight.
 
 Open **Dub a Video**, paste the video's normal page URL or choose/drop a local file, select the language, and click **Dub Video**. The app checks the required tools, creates a project, generates subtitles and voices, and opens the finished video. The progress screen shows the current stage; its percentage describes that stage rather than the entire job. Use **Save Video…** on the result page to export the finished movie.
 
-English uses the automatic local voice path by default. Other dubbing languages currently require selecting ElevenLabs under Settings → Providers and adding an API key. A model or tool missing from the Mac is reported before the job starts; use **System Check** for details. Voice, subtitle, and timing changes can be inspected later in the project's dub details.
+Source language is detected automatically. English uses the existing local voice path; other supported target languages use Chatterbox Multilingual when installed, or ElevenLabs if you configure an API key. A missing model or tool is reported before the one-click job starts; use **System Check** for details. The first model download can take time. Voice, subtitle, and timing changes can be inspected later in the project's dub details. Automatic detection is for the primary spoken language of the video; heavily code-switched dialogue may need a manually specified source language in the CLI.
 
 To rebuild only the native app:
 
@@ -298,13 +298,13 @@ python -m anime_dubber.cli projects -o ~/Movies/AnimeDubber
 python -m anime_dubber.cli resume-dub PROJECT_ID DUB_ID -o ~/Movies/AnimeDubber
 ```
 
-Each `run` creates a version. Its translated SRT/VTT appears under `versions/<version-id>/` before dubbing finishes. Non-English dub audio currently requires `--tts elevenlabs` and a multilingual ElevenLabs voice; for other languages without that provider, use `--subtitles-only`.
+Each `run` creates a version. Its translated SRT/VTT appears under `versions/<version-id>/` before dubbing finishes. For a non-English dub, install Chatterbox Multilingual (`macos/install_voice_engines.sh` on Mac) or set `--tts elevenlabs` with a multilingual ElevenLabs voice and API key. `--source-language auto` is the default; pass a specific language code to override detection. If no supported voice engine is available, use `--subtitles-only`.
 
 Use **Pause** while a dub is processing, then **Resume This Dub** in Dub Details. Failed jobs can also be resumed there. Resume preserves the dub ID and completed source, subtitles, translation batches, and voice clips whose settings still match. The operation in progress may need to restart; a model call may finish before the pause takes effect. Restarting the app after a crash also leaves the interrupted dub available to resume. Keep the project's `.anime_dubber_work` directory to retain these checkpoints. For ElevenLabs dubs, re-enter the API key in Settings or pass `--elevenlabs-api-key` when resuming from CLI.
 
 ### Selective subtitle review and Mac speed sample
 
-Run this after the Chinese and translated SRT files have appeared. It does not change the dub currently processing or overwrite the subtitles. The first pass only detects likely transcription, translation, and timing issues:
+Run this after the original-language and translated SRT files have appeared. For a non-Chinese original use `--source-language` with its code. It does not change the dub currently processing or overwrite the subtitles. The first pass only detects likely transcription, translation, and timing issues:
 
 ```bash
 python -m anime_dubber.cli review-subtitles \

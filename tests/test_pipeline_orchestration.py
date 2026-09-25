@@ -12,6 +12,37 @@ from anime_dubber.core import CommandRunner, Config, Segment, run_pipeline
 
 
 class PipelineOrchestrationTests(unittest.TestCase):
+    def test_detected_spanish_to_japanese_publishes_language_specific_subtitles(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "clip.mp4"; source.write_bytes(b"video")
+            audio = root / "dialog.wav"; audio.write_bytes(b"audio")
+            published = []
+            runner = CommandRunner()
+            runner.artifact = lambda kind, path, language: published.append((kind, language))
+            cfg = Config(source=str(source), output_dir=root / "out", source_language="auto",
+                         target_language="ja", mode="subtitles", translation="llm")
+
+            def recognize(_audio, config, *_args, **_kwargs):
+                config.source_language = "es"
+                return [Segment(0, 2, "Hola")]
+
+            def translate(segments, *_args):
+                segments[0].translated = "こんにちは"
+                return segments
+
+            with patch("anime_dubber.core.extract_audio", return_value=audio), \
+                 patch("anime_dubber.core.separate_dialogue", return_value=(audio, audio)), \
+                 patch("anime_dubber.core.transcribe_audio", side_effect=recognize), \
+                 patch("anime_dubber.core.translate_with_llm", side_effect=translate):
+                result = run_pipeline(cfg, lambda _message: None, runner)
+
+            self.assertEqual(cfg.source_language, "es")
+            self.assertIn(("source_srt", "es"), published)
+            self.assertIn(("translated_srt", "ja"), published)
+            self.assertIn("Hola", result["source_srt"].read_text())
+            self.assertIn("こんにちは", result["translated_srt"].read_text())
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
     def test_auto_character_references_reach_chatterbox_in_full_dub(self):
         try:

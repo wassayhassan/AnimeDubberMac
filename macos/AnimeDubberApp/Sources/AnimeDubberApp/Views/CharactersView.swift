@@ -217,7 +217,7 @@ private struct CharacterInspector: View {
                     .padding(.top, 4)
                 }
 
-                GroupBox("English Voice") {
+                GroupBox("Dub Voice") {
                     VStack(alignment: .leading, spacing: 12) {
                         Picker("Engine", selection: $state.characterDraft.ttsProvider) {
                             ForEach(engines, id: \.0) { engine in

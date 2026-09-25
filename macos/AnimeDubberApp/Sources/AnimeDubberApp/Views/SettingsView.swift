@@ -170,7 +170,7 @@ struct SettingsView: View {
                 }
             }
 
-            Section("English Voice") {
+            Section("Dub Voice") {
                 Picker("Voice engine", selection: $state.voiceProvider) {
                     ForEach(VoiceProvider.allCases) { provider in
                         Text(provider.title).tag(provider)
@@ -178,7 +178,7 @@ struct SettingsView: View {
                 }
 
                 if state.voiceProvider == .auto {
-                    Text("Automatic prefers Chatterbox voice cloning, then Kokoro and other installed voices. Chinese-to-English clones use Chatterbox Standard to reduce accent transfer.")
+                    Text("Automatic prefers Chatterbox for local voice cloning. Other dub languages use Chatterbox Multilingual when installed, or ElevenLabs with an API key.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -204,7 +204,7 @@ struct SettingsView: View {
                         }
 
                         Toggle("Use Chatterbox Turbo", isOn: $state.chatterboxTurbo)
-                        Text("English dubs with a Chinese voice reference use Chatterbox Standard with accent mitigation even when Turbo is selected. This can take longer. It may retain some source accent.")
+                        Text("English dubs using a non-English voice reference use Chatterbox Standard to reduce accent transfer, even when Turbo is selected. This can take longer.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 

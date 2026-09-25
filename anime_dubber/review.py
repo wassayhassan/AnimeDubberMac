@@ -16,11 +16,33 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from .core import DEFAULT_CONTEXT, DEFAULT_GLOSSARY, _atomic_json_write, _response_text, glossary_string, parse_translation_response
+from .languages import source_name, target_name
 
 
 TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,\.](\d{3})")
 HAN = re.compile(r"[\u3400-\u9fff]")
 ODD = re.compile(r"[\u0400-\u04ff\u0600-\u06ff\u0900-\u097f\u0e00-\u0e7f]")
+SCRIPTS = {
+    "zh": HAN, "ja": re.compile(r"[\u3040-\u30ff\u3400-\u9fff]"),
+    "ko": re.compile(r"[\uac00-\ud7af]"), "hi": re.compile(r"[\u0900-\u097f]"),
+    "ar": re.compile(r"[\u0600-\u06ff]"),
+}
+LATIN = re.compile(r"[A-Za-z\u00c0-\u024f]")
+LATIN_LANGUAGES = frozenset({"en", "es", "fr", "de", "pt", "it", "nl", "sv", "da", "no", "fi", "pl", "cs", "sk", "ro", "hu", "tr", "vi", "id", "ms", "tl", "sw", "hr", "sr", "sl", "et", "lv", "lt", "is", "ca", "gl", "eu", "af"})
+
+
+def _source_script(language: str) -> re.Pattern | None:
+    return SCRIPTS.get(language) or (LATIN if language in LATIN_LANGUAGES else None)
+
+
+def _expected_source(text: str, language: str) -> bool:
+    script = _source_script(language)
+    return bool(script and script.search(text))
+
+
+def _wrong_target_script(text: str, language: str) -> bool:
+    return bool(text and not SCRIPTS.get(language, LATIN).search(text)
+                and (HAN.search(text) or ODD.search(text)))
 
 
 def read_srt(path: Path) -> list[dict]:
@@ -41,7 +63,7 @@ def read_srt(path: Path) -> list[dict]:
     return entries
 
 
-def flags_for(source: dict, target: dict, language: str = "en") -> list[str]:
+def flags_for(source: dict, target: dict, language: str = "en", source_language: str = "zh") -> list[str]:
     original, translation = source["text"], target["text"]
     duration = target["end"] - target["start"]
     reasons = []
@@ -55,16 +77,19 @@ def flags_for(source: dict, target: dict, language: str = "en") -> list[str]:
         reasons.append("reading_speed")
     if abs(source["start"] - target["start"]) > 0.05 or abs(source["end"] - target["end"]) > 0.05:
         reasons.append("timing_mismatch")
-    if ODD.search(original):
+    if source_language == "zh" and ODD.search(original):
         reasons.append("mixed_script_in_source")
-    if original and not HAN.search(original) and (re.search(r"[A-Za-z]{3,}", original) or
-                                                  re.search(r"[\u3040-\u30ff]", original)):
-        reasons.append("non_chinese_source")
-    if language == "en" and HAN.search(translation):
-        reasons.append("untranslated_chinese")
-    if language == "en" and re.search(r"\b(?:old six|force the king)\b", translation, re.I):
+    expected = _source_script(source_language)
+    other_script = HAN if source_language not in {"zh", "ja"} else LATIN
+    if expected and original and not expected.search(original) and other_script.search(original):
+        reasons.append("non_chinese_source" if source_language == "zh" else "source_language_mismatch")
+    target_script = SCRIPTS.get(language, LATIN)
+    if (expected and translation and language != source_language and expected.search(translation)
+            and (not target_script.search(translation) or (source_language == "zh" and language == "en"))):
+        reasons.append("untranslated_chinese" if source_language == "zh" else "untranslated_source")
+    if language == "en" and source_language == "zh" and re.search(r"\b(?:old six|force the king)\b", translation, re.I):
         reasons.append("literal_idiom")
-    if original.strip() == translation.strip():
+    if language != source_language and original.strip() == translation.strip():
         reasons.append("untranslated_text")
     return reasons
 
@@ -97,6 +122,7 @@ def review_subtitles(
     report_path: Path,
     *,
     language: str = "en",
+    source_language: str = "zh",
     model: str = "",
     context: str = DEFAULT_CONTEXT,
     glossary: Mapping[str, str] | None = None,
@@ -113,6 +139,7 @@ def review_subtitles(
     requesting the same expensive review. The original SRT is never modified.
     """
     started = time.monotonic()
+    speech_name = "Mandarin" if source_language == "zh" else source_name(source_language)
     glossary = dict(DEFAULT_GLOSSARY if glossary is None else glossary)
     source, target = read_srt(source_path), read_srt(target_path)
     if len(source) != len(target):
@@ -128,6 +155,7 @@ def review_subtitles(
     signature_asr_model = asr_model if audio else previous.get("asr_model") if isinstance(previous, dict) else None
     signature = hashlib.sha256(json.dumps({
         "source": source, "target": target, "language": language, "model": signature_model,
+        **({"source_language": source_language} if source_language != "zh" else {}),
         "context": context, "glossary": glossary,
         "audio": audio_identity,
         "asr_model": signature_asr_model,
@@ -145,7 +173,7 @@ def review_subtitles(
                      and 1 <= int(key) <= len(target)}
     flagged = []
     for idx, (a, b) in enumerate(zip(source, target), start=1):
-        reasons = flags_for(a, b, language)
+        reasons = flags_for(a, b, language, source_language)
         issue = timing_issues.get(idx)
         if issue:
             reasons.append("speech_overlap")
@@ -165,7 +193,8 @@ def review_subtitles(
     if max_lines > 0:
         selected = selected[:max_lines]
     result = {"signature": signature, "source_file": str(source_path),
-              "translation_file": str(target_path), "review_model": signature_model or None,
+              "translation_file": str(target_path), "source_language": source_language,
+              "target_language": language, "review_model": signature_model or None,
               "audio_identity": audio_identity, "asr_model": signature_asr_model,
               "total_cues": len(source), "flagged_cues": len(flagged),
               "sampled_cues": len(selected), "priority_cues": [row["cue"] for row in selected],
@@ -180,8 +209,8 @@ def review_subtitles(
         pending_asr = [row for row in selected if (focus_cues is None or row["cue"] in focus_cues)
                        and not row.get("asr_candidate") and
                        any(reason in row["reasons"] for reason in
-                           ("mixed_script_in_source", "non_chinese_source",
-                            "untranslated_text", "untranslated_chinese"))]
+                           ("mixed_script_in_source", "non_chinese_source", "source_language_mismatch",
+                            "untranslated_text", "untranslated_chinese", "untranslated_source"))]
         for n, row in enumerate(pending_asr, 1):
             with tempfile.TemporaryDirectory(prefix="animedubber-review-") as tmp:
                 clip = Path(tmp) / "clip.wav"
@@ -191,7 +220,7 @@ def review_subtitles(
                                 "-i", str(audio), "-t", str(duration), "-ac", "1", "-ar", "16000", str(clip)],
                                check=True)
                 alternate = mlx_whisper.transcribe(str(clip), path_or_hf_repo=asr_model,
-                                                   language="zh", task="transcribe")
+                                                   language=source_language, task="transcribe")
                 value = str(alternate.get("text", "")).strip()
                 if value:
                     row["asr_candidate"] = value
@@ -202,8 +231,8 @@ def review_subtitles(
         from mlx_lm import generate, load
         pending = [row for row in selected if (focus_cues is None or row["cue"] in focus_cues)
                    and (not row.get("suggestion") or
-                        ("non_chinese_source" in row["reasons"] and
-                         HAN.search(row.get("asr_candidate", "")) and
+                        (set(row["reasons"]) & {"non_chinese_source", "source_language_mismatch"} and
+                         _expected_source(row.get("asr_candidate", ""), source_language) and
                          not row.get("asr_translation")))]
         if pending:
             load_start = time.monotonic()
@@ -213,16 +242,16 @@ def review_subtitles(
             generation_start = time.monotonic()
             glossary_text = glossary_string(glossary)
             for n, row in enumerate(pending, 1):
-                if ("non_chinese_source" in row["reasons"] and
-                        HAN.search(row.get("asr_candidate", "")) and
+                if (set(row["reasons"]) & {"non_chinese_source", "source_language_mismatch"} and
+                        _expected_source(row.get("asr_candidate", ""), source_language) and
                         not row.get("asr_translation")):
                     # Translate the alternate independently, without the original
                     # English guess to anchor the model to a suspect transcript.
                     alternate_prompt = (
-                        f"Translate this tentative Mandarin transcription into {language}. "
+                        f"Translate this tentative {speech_name} transcription into {target_name(language)}. "
                         "Return only the translation in one short line, with no notes. "
                         "The transcription may be wrong, so do not add context.\n"
-                        f"Mandarin: {row['asr_candidate']}"
+                        f"{speech_name}: {row['asr_candidate']}"
                     )
                     if getattr(tokenizer, "chat_template", None) is not None:
                         try:
@@ -238,7 +267,7 @@ def review_subtitles(
                     if (alternate_text and len(alternate_text.splitlines()) == 1
                             and len(alternate_text) <= 200 and
                             not alternate_text.startswith(("{", "[", "<")) and
-                            not (language == "en" and HAN.search(alternate_text))):
+                            not _wrong_target_script(alternate_text, language)):
                         row["asr_translation"] = alternate_text
                         _atomic_json_write(report_path, result)
                 if row.get("suggestion"):
@@ -252,20 +281,20 @@ def review_subtitles(
                     target_words = max(3, math.floor(word_count * min(1.0, available / generated) * 0.8))
                     timing_instruction = (f"Generated speech took {generated:.2f}s; only {available:.2f}s "
                                           f"is free before the next voice. Aim for at most {target_words} "
-                                          "English words, preserve the meaning, and do not omit names or key facts.")
+                                          f"{'characters' if language in {'zh', 'ja'} else 'spoken words'}, preserve the meaning, and do not omit names or key facts.")
                 else:
                     timing_instruction = f"Subtitle time window: {row['end'] - row['start']:.2f}s."
                 neighbors = [{"source": source[j]["text"], "translation": target[j]["text"]}
                              for j in range(max(0, idx - 2), min(len(source), idx + 3)) if j != idx]
-                source_mismatch = "non_chinese_source" in row["reasons"]
+                source_mismatch = bool(set(row["reasons"]) & {"non_chinese_source", "source_language_mismatch"})
                 source_guidance = (
-                    "The source transcript is not Mandarin and may be a recognition error. "
-                    "If the alternate Mandarin transcript is plausible, translate that instead; "
+                    f"The source transcript is not {speech_name} and may be a recognition error. "
+                    f"If the alternate {speech_name} transcript is plausible, translate that instead; "
                     "treat it as unverified, and do not infer extra words from context. "
                     if source_mismatch else ""
                 )
                 prompt = (
-                    f"Check this {language} subtitle against its Chinese source. Suggest a short, natural translation "
+                    f"Check this {target_name(language)} subtitle against its {source_name(source_language)} source. Suggest a short, natural translation "
                     "that fits the timing. Do not invent missing source speech. Return ONLY a JSON array "
                     f"with one object: {{\"id\": {row['cue']}, \"text\": \"suggestion\"}}.\n"
                     f"{source_guidance}"
@@ -289,17 +318,17 @@ def review_subtitles(
                 response = generate(llm, tokenizer, prompt=rendered, max_tokens=256, verbose=False)
                 parsed = parse_translation_response(_response_text(response), [row["cue"]])
                 suggestion = parsed.get(row["cue"], "")
-                unchanged_mismatch = (source_mismatch and HAN.search(row.get("asr_candidate", ""))
+                unchanged_mismatch = (source_mismatch and _expected_source(row.get("asr_candidate", ""), source_language)
                                       and suggestion.casefold().strip() == row["translation"].casefold().strip())
-                if not suggestion or unchanged_mismatch or (language == "en" and HAN.search(suggestion)):
+                if not suggestion or unchanged_mismatch or _wrong_target_script(suggestion, language):
                     # Smaller local models sometimes answer in prose instead of JSON.
                     # Retry this cue once with a simpler format before asking for a manual decision.
                     suggestion = ""
                     alternate = row.get("asr_candidate", "")
                     retry_prompt = (
-                        f"Translate only the Mandarin speech into natural {language}. "
+                        f"Translate only the {speech_name} speech into natural {target_name(language)}. "
                         "Return only one short translated line; no JSON, notes, or explanation.\n"
-                        f"Mandarin transcription: {alternate if source_mismatch and HAN.search(alternate) else row['source']}\n"
+                        f"{speech_name} transcription: {alternate if source_mismatch and _expected_source(alternate, source_language) else row['source']}\n"
                         f"Unverified existing translation: {row['translation']}\n"
                         f"Context: {context}\n{timing_instruction}"
                     )
@@ -316,8 +345,8 @@ def review_subtitles(
                     retry = re.sub(r"^```[^\n]*\n|\n```$", "", retry).strip().strip('"')
                     if (retry and len(retry.splitlines()) == 1 and len(retry) <= 200
                             and not retry.startswith(("{", "[", "<"))
-                            and not (language == "en" and HAN.search(retry))
-                            and not (source_mismatch and HAN.search(alternate)
+                            and not _wrong_target_script(retry, language)
+                            and not (source_mismatch and _expected_source(alternate, source_language)
                                      and retry.casefold() == row["translation"].casefold())):
                         suggestion = retry
                 if suggestion:

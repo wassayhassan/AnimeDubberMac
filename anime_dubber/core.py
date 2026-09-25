@@ -18,6 +18,7 @@ import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from .languages import source_name, target_name
 from urllib.parse import parse_qs, urlparse
 
 WHISPER_MODEL = "mlx-community/whisper-large-v3-mlx"
@@ -27,10 +28,7 @@ SAMPLE_RATE = 44100
 DIALOGUE_GUARD_PRE = 0.24
 DIALOGUE_GUARD_POST = 0.16
 
-DEFAULT_CONTEXT = (
-    "Chinese xianxia/xuanhuan cultivation animation. Preserve character names, sect names, realm names, "
-    "system terminology, cultivation terminology, and concise dramatic dialogue."
-)
+DEFAULT_CONTEXT = "Preserve names, intent, tone, and recurring terminology; use natural concise dialogue."
 
 DEFAULT_GLOSSARY: Dict[str, str] = {
     "修为": "cultivation",
@@ -127,7 +125,7 @@ class Config:
     output_dir: Path
     mode: str = "dub"  # subtitles|dub
     target_language: str = "en"
-    source_language: str = "zh"
+    source_language: str = "zh"  # auto for new jobs; zh preserves old direct Config callers
     version_id: str = ""
     asr_provider: str = "auto"  # auto|mlx_whisper|faster_whisper
     mlx_whisper_model: str = WHISPER_MODEL
@@ -561,7 +559,8 @@ def translate_with_llm(
     runner: CommandRunner,
     progress: ProgressCallback,
 ) -> List[Segment]:
-    target = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "ja": "Japanese"}[config.target_language]
+    target = target_name(config.target_language)
+    source = source_name(config.source_language)
     signature_inputs = {
         "model": config.llm_model,
         "target_language": config.target_language,
@@ -569,15 +568,17 @@ def translate_with_llm(
         "glossary": config.glossary,
         "source_text": [s.text for s in segments],
     }
+    if config.source_language != "zh":
+        signature_inputs["source_language"] = config.source_language
     translation_signature = hashlib.sha1(json.dumps(
         signature_inputs, ensure_ascii=False, sort_keys=True
     ).encode("utf-8")).hexdigest()[:12]
     cache_path = work_dir / f"translations_llm_{translation_signature}.json"
     cache: Dict[str, str] = {}
     legacy_path = None
-    if config.target_language == "en":
+    if config.target_language == "en" and config.source_language == "zh":
         old_inputs = dict(signature_inputs)
-        old_inputs.pop("target_language")
+        old_inputs.pop("target_language", None)
         old_signature = hashlib.sha1(json.dumps(
             old_inputs, ensure_ascii=False, sort_keys=True
         ).encode("utf-8")).hexdigest()[:12]
@@ -639,11 +640,11 @@ def translate_with_llm(
         ids = pending[off:off + batch_size]
         payload = [{"id": i, "text": segments[i].text} for i in ids]
         prompt = (
-            f"Translate the following Chinese dialogue into natural concise {target} for an episodic xianxia/cultivation animation.\n"
+            f"Translate the following {source} dialogue into natural concise {target}.\n"
             "Rules:\n"
             f"1. Return ONLY a JSON array of objects with exactly the same ids, each shaped {{\"id\": number, \"text\": \"{target}\"}}.\n"
             "2. Do not omit, merge, summarize, explain, or add dialogue.\n"
-            "3. Keep proper names, sect names, realm names, and terminology consistent.\n"
+            "3. Keep proper names and recurring terminology consistent.\n"
             f"4. Prefer short spoken {target} so dubbing can fit the original timing.\n"
             f"Context: {config.context}\n"
             f"Glossary: {gl}\n"
@@ -660,8 +661,8 @@ def translate_with_llm(
         missing = [i for i in ids if i not in parsed]
         for i in missing:
             one_prompt = (
-                f"Translate this Chinese xianxia dialogue into concise natural {target}. Return ONLY the translation, no quotes or explanation.\n"
-                f"Context: {config.context}\nGlossary: {gl}\nChinese: {segments[i].text}"
+                f"Translate this {source} dialogue into concise natural {target}. Return ONLY the translation, no quotes or explanation.\n"
+                f"Context: {config.context}\nGlossary: {gl}\n{source}: {segments[i].text}"
             )
             raw = generate_text(one_prompt, max_tokens=256).strip()
             raw = re.sub(r"^```.*?\n|\n```$", "", raw, flags=re.S).strip().strip('"')
@@ -685,10 +686,11 @@ def translate_with_ollama_provider(
     runner: CommandRunner,
     progress: ProgressCallback,
 ) -> List[Segment]:
-    target = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "ja": "Japanese"}[config.target_language]
+    target = target_name(config.target_language)
+    source = source_name(config.source_language)
     from .providers.translation import translate_with_ollama
 
-    translation_signature = hashlib.sha1(json.dumps({
+    signature_inputs = {
         "provider": "ollama",
         "target_language": config.target_language,
         "model": config.ollama_model,
@@ -696,7 +698,11 @@ def translate_with_ollama_provider(
         "context": config.context,
         "glossary": config.glossary,
         "source_text": [s.text for s in segments],
-    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    }
+    if config.source_language != "zh":
+        signature_inputs["source_language"] = config.source_language
+    translation_signature = hashlib.sha1(json.dumps(
+        signature_inputs, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
     cache_path = work_dir / f"translations_ollama_{translation_signature}.json"
     cache: Dict[str, str] = {}
     if config.resume and cache_path.exists() and not config.force:
@@ -723,13 +729,12 @@ def translate_with_ollama_provider(
         ids = pending[off:off + batch_size]
         payload = [{"id": i, "text": segments[i].text} for i in ids]
         prompt = (
-            f"Translate the following Chinese dialogue into natural concise {target} for an episodic "
-            "xianxia/cultivation animation.\n"
+            f"Translate the following {source} dialogue into natural concise {target}.\n"
             "Rules:\n"
             "1. Return ONLY a JSON array of objects with exactly the same ids, each shaped "
             f"{{\"id\": number, \"text\": \"{target}\"}}.\n"
             "2. Do not omit, merge, summarize, explain, or add dialogue.\n"
-            "3. Keep proper names, sect names, realm names, and terminology consistent.\n"
+            "3. Keep proper names and recurring terminology consistent.\n"
             f"4. Prefer short spoken {target} so dubbing can fit the original timing.\n"
             f"Context: {config.context}\n"
             f"Glossary: {gl}\n"
@@ -739,11 +744,11 @@ def translate_with_ollama_provider(
 
     def single_prompt(idx: int) -> str:
         return (
-            f"Translate this Chinese xianxia dialogue into concise natural {target}. "
+            f"Translate this {source} dialogue into concise natural {target}. "
             "Return ONLY the translation, no quotes or explanation.\n"
             f"Context: {config.context}\n"
             f"Glossary: {gl}\n"
-            f"Chinese: {segments[idx].text}"
+            f"{source}: {segments[idx].text}"
         )
 
     def save_batch(ids: List[int], values: Dict[int, str]) -> None:
@@ -816,8 +821,16 @@ def transcribe_audio(
     from .providers.asr import resolve_asr_provider
 
     provider = resolve_asr_provider(config.asr_provider)
+    requested_language = config.source_language.lower()
+    detection_path = work_dir / "detected_source_language.json"
+    if requested_language == "auto" and task == "translate" and detection_path.exists():
+        try:
+            config.source_language = str(json.loads(detection_path.read_text(encoding="utf-8"))["language"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    language_tag = config.source_language if task == "transcribe" else "en"
     cache_name = (
-        f"transcript_zh_{provider}_v5_precise.json"
+        f"transcript_{language_tag}_{provider}_v5_precise.json"
         if task == "transcribe"
         else f"transcript_en_{provider}_v5_precise.json"
     )
@@ -835,10 +848,28 @@ def transcribe_audio(
         else f"transcript_en_{provider}_v4.json"
     )
     cache_to_read = cache
+    if (task == "transcribe" and config.source_language == "auto" and config.resume
+            and not config.force and not cache.exists() and detection_path.exists()):
+        try:
+            known_language = str(json.loads(detection_path.read_text(encoding="utf-8"))["language"])
+            known_cache = work_dir / cache_name.replace("transcript_auto_", f"transcript_{known_language}_", 1)
+            if known_cache.exists():
+                cache_to_read = known_cache
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    if (task == "transcribe" and config.source_language == "auto" and config.resume
+            and not config.force and not cache.exists() and not detection_path.exists()):
+        # Projects created before language detection used a Mandarin-specific cache.
+        old_chinese = work_dir / f"transcript_zh_{provider}_v5_precise.json"
+        if old_chinese.exists():
+            cache_to_read = old_chinese
+            config.source_language = "zh"
+            _atomic_json_write(detection_path, {"language": "zh"})
+            progress("Reusing the existing Chinese transcript for this project")
     if (
         config.resume
         and not config.force
-        and not cache.exists()
+        and not cache_to_read.exists()
         and (previous_v4.exists() or legacy_cache.exists())
     ):
         progress(
@@ -861,13 +892,20 @@ def transcribe_audio(
             ):
                 progress(f"Repaired cached transcript timing: {len(raw_cached)} -> {len(cleaned)} segments")
                 _atomic_json_write(cache, [seg.to_dict() for seg in cleaned])
+            if config.source_language == "auto":
+                detected = json.loads(detection_path.read_text(encoding="utf-8"))
+                config.source_language = str(detected["language"])
             return cleaned
         except (ValueError, TypeError, KeyError, OSError):
             progress("Transcript cache was incomplete; rebuilding this stage…")
     initial_prompt = (
         "玄幻 修仙 系统 天墟圣殿 胤天绝 修为 灵根 境界 宗主 掌门 长老 老祖 天劫 丹田 元神 法宝"
-        if task == "transcribe" else None
+        if task == "transcribe" and config.source_language == "zh" else None
     )
+    detected_language = None
+    def note_language(value: str) -> None:
+        nonlocal detected_language
+        detected_language = value.lower()
     runner.check_cancel()
 
     if provider == "mlx_whisper":
@@ -879,23 +917,24 @@ def transcribe_audio(
                 "On Windows/Linux install faster-whisper and use --asr faster-whisper."
             ) from e
         progress(
-            "Transcribing Mandarin with MLX-Whisper…"
+            "Detecting language and transcribing with MLX-Whisper…"
             if task == "transcribe"
             else "Translating speech directly with MLX-Whisper…"
         )
         result = mlx_whisper.transcribe(
             str(audio),
             path_or_hf_repo=config.mlx_whisper_model,
-            language="zh",
+            language=None if config.source_language == "auto" else config.source_language,
             task=task,
             initial_prompt=initial_prompt,
             word_timestamps=True,
         )
         provider_rows = result.get("segments", [])
+        note_language(str(result.get("language") or config.source_language))
     elif provider == "faster_whisper":
         from .providers.asr import faster_whisper_segments
         progress(
-            f"Transcribing Mandarin with Faster-Whisper ({config.faster_whisper_model})…"
+            f"Detecting language and transcribing with Faster-Whisper ({config.faster_whisper_model})…"
             if task == "transcribe"
             else f"Translating speech directly with Faster-Whisper ({config.faster_whisper_model})…"
         )
@@ -906,7 +945,8 @@ def transcribe_audio(
                 model_name=config.faster_whisper_model,
                 device=config.faster_whisper_device,
                 compute_type=config.faster_whisper_compute_type,
-                language="zh",
+                language=None if config.source_language == "auto" else config.source_language,
+                language_sink=note_language,
                 initial_prompt=initial_prompt,
                 cancel_check=runner.check_cancel,
             )
@@ -914,6 +954,13 @@ def transcribe_audio(
             raise PipelineError(str(e)) from e
     else:
         raise PipelineError(f"Unsupported ASR provider: {provider}")
+
+    if task == "transcribe" and config.source_language == "auto":
+        if not detected_language or detected_language == "auto":
+            raise PipelineError("Could not detect the source language. Set the source language explicitly and retry.")
+        config.source_language = detected_language
+        _atomic_json_write(detection_path, {"language": detected_language})
+        progress(f"Detected source language: {source_name(detected_language)} ({detected_language})")
 
     raw_segs = []
     for x in provider_rows:
@@ -1331,11 +1378,19 @@ def prepare_tts_clip(
     kokoro_voice = str(profile.get("kokoro_voice", "") or config.kokoro_voice).strip()
     profile_engine = str(profile.get("tts_provider", "") or "").strip().lower()
     resolved_tts = profile_engine if profile_engine and profile_engine != "inherit" else config.tts_engine
-    if config.target_language != "en" and resolved_tts != "elevenlabs":
-        raise PipelineError(
-            f"Character {seg.speaker_id or index} uses {resolved_tts}, but non-English dubbing "
-            "currently requires an ElevenLabs multilingual voice. Update the character voice override."
-        )
+    if config.target_language != "en":
+        from .providers.tts import multilingual_chatterbox_available
+        if resolved_tts in {"auto", "chatterbox"}:
+            if multilingual_chatterbox_available():
+                resolved_tts = "chatterbox_multilingual"
+            elif resolved_tts == "auto" and (config.elevenlabs_api_key or os.getenv("ELEVENLABS_API_KEY")):
+                resolved_tts = "elevenlabs"
+            else:
+                raise PipelineError("Install Chatterbox Multilingual or configure ElevenLabs to dub "
+                                    f"in {target_name(config.target_language)}.")
+        elif resolved_tts not in {"chatterbox_multilingual", "elevenlabs"}:
+            raise PipelineError(f"{resolved_tts} does not support dubbing in {target_name(config.target_language)}. "
+                                "Choose Automatic, Chatterbox Multilingual, or ElevenLabs.")
 
     if resolved_tts == "auto":
         from .providers.tts import chatterbox_available, kokoro_available, piper_available
@@ -1356,7 +1411,7 @@ def prepare_tts_clip(
             else:
                 resolved_tts = "elevenlabs"
 
-    if resolved_tts == "chatterbox" and chatterbox_reference:
+    if resolved_tts in {"chatterbox", "chatterbox_multilingual"} and chatterbox_reference:
         from .providers.tts import MIN_CHATTERBOX_REFERENCE_SECONDS, reference_audio_duration
         ref_seconds = reference_audio_duration(chatterbox_reference)
         if ref_seconds < MIN_CHATTERBOX_REFERENCE_SECONDS:
@@ -1393,10 +1448,12 @@ def prepare_tts_clip(
         "eleven_model": config.elevenlabs_model_id,
         "timing": [round(seg.start, 3), round(seg.end, 3)],
     }
+    if config.target_language != "en":
+        signature_data["target_language"] = config.target_language
     if resolved_tts == "piper":
         signature_data["piper_model"] = config.piper_model or os.getenv("PIPER_MODEL", "")
         signature_data["piper_speaker"] = config.piper_speaker
-    elif resolved_tts == "chatterbox":
+    elif resolved_tts in {"chatterbox", "chatterbox_multilingual"}:
         signature_data["reference_audio"] = chatterbox_reference
         if chatterbox_reference:
             ref_path = Path(chatterbox_reference).expanduser()
@@ -1406,6 +1463,8 @@ def prepare_tts_clip(
         signature_data["device"] = config.chatterbox_device
         signature_data["turbo"] = bool(config.chatterbox_turbo)
         signature_data["american_english"] = american_english
+        if resolved_tts == "chatterbox_multilingual":
+            signature_data["model"] = "multilingual-v3"
     elif resolved_tts == "kokoro":
         signature_data["kokoro_voice"] = kokoro_voice
         signature_data["kokoro_language"] = config.kokoro_language
@@ -1449,6 +1508,17 @@ def prepare_tts_clip(
                 turbo=bool(config.chatterbox_turbo),
                 american_english=american_english,
                 cancel_check=runner.check_cancel,
+            )
+        except Exception as e:
+            raise PipelineError(str(e)) from e
+    elif resolved_tts == "chatterbox_multilingual":
+        from .providers.tts import synthesize_multilingual_chatterbox
+        try:
+            synthesize_multilingual_chatterbox(
+                text, source_audio, language=config.target_language,
+                reference_audio=chatterbox_reference,
+                expressiveness=chatterbox_expressiveness,
+                device=config.chatterbox_device, cancel_check=runner.check_cancel,
             )
         except Exception as e:
             raise PipelineError(str(e)) from e
@@ -2001,8 +2071,8 @@ def analyze_only(config: Config, progress: Optional[ProgressCallback] = None, ru
     vocals, _background = separate_dialogue(audio, work, runner, progress, config)
     segments = transcribe_audio(vocals, config, work, runner, progress, task="transcribe")
     if not segments:
-        raise PipelineError("No Mandarin speech segments were detected after dialogue separation.")
-    zh_srt = out / f"{key}_zh.srt"; write_srt(segments, zh_srt, translated=False)
+        raise PipelineError("No speech segments were detected after dialogue separation.")
+    zh_srt = out / f"{key}_{config.source_language}.srt"; write_srt(segments, zh_srt, translated=False)
     from .characters import analyze_characters, write_character_map
     char_path = _character_map_path(config, out, key)
     profiles, payload = analyze_characters(
@@ -2015,7 +2085,8 @@ def analyze_only(config: Config, progress: Optional[ProgressCallback] = None, ru
     payload["characters"] = [p.to_dict() for p in profiles]
     write_character_map(payload, char_path)
     progress(f"DONE: {char_path}")
-    return {"character_map": char_path, "chinese_srt": zh_srt}
+    return {"character_map": char_path,
+            "chinese_srt" if config.source_language == "zh" else "source_srt": zh_srt}
 
 def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, runner: Optional[CommandRunner] = None) -> Dict[str, Path]:
     progress = progress or print
@@ -2048,13 +2119,14 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
 
     zh_segments = transcribe_audio(transcript_audio, config, work, runner, progress, task="transcribe")
     if not zh_segments:
-        raise PipelineError("No Mandarin speech segments were detected. Try the original soundtrack, a different source, or --force to rebuild cached separation.")
-    zh_srt = out / f"{key}_zh.srt"
+        raise PipelineError("No speech segments were detected. Try the original soundtrack, a different source, or --force to rebuild cached separation.")
+    source_kind = "chinese" if config.source_language == "zh" else "source"
+    zh_srt = out / f"{key}_{config.source_language}.srt"
     write_srt(zh_segments, zh_srt, translated=False)
-    zh_vtt = out / f"{key}_zh.vtt"
+    zh_vtt = out / f"{key}_{config.source_language}.vtt"
     write_vtt(zh_segments, zh_vtt, translated=False)
-    publish("chinese_srt", zh_srt, "zh")
-    publish("chinese_vtt", zh_vtt, "zh")
+    publish(f"{source_kind}_srt", zh_srt, config.source_language)
+    publish(f"{source_kind}_vtt", zh_vtt, config.source_language)
 
     translation_mode = config.translation
     if translation_mode == "auto":
@@ -2066,12 +2138,16 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                 translation_mode = "whisper"
         else:
             translation_mode = "ollama" if config.target_language != "en" else "whisper"
-    if config.target_language != "en" and translation_mode == "whisper":
+    if config.target_language != "en" and translation_mode == "whisper" and config.source_language != config.target_language:
         raise PipelineError("Whisper direct translation only supports English; choose LLM or Ollama.")
-    if config.review_before_dub and config.mode == "dub" and translation_mode == "whisper":
+    if (config.review_before_dub and config.mode == "dub" and translation_mode == "whisper"
+            and config.source_language != config.target_language):
         progress("Direct Whisper translation does not provide aligned source cues for automatic review")
 
-    if translation_mode == "llm":
+    if config.source_language == config.target_language:
+        segments = [Segment(s.start, s.end, s.text, s.text) for s in zh_segments]
+        progress("Source and target languages match; keeping the original dialogue")
+    elif translation_mode == "llm":
         segments = translate_with_llm(zh_segments, config, work, runner, progress)
     elif translation_mode == "ollama":
         segments = translate_with_ollama_provider(zh_segments, config, work, runner, progress)
@@ -2103,7 +2179,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     write_vtt(segments, en_vtt, translated=True)
     publish("translated_srt", en_srt, config.target_language)
     publish("translated_vtt", en_vtt, config.target_language)
-    results: Dict[str, Path] = {"chinese_srt": zh_srt, "chinese_vtt": zh_vtt,
+    results: Dict[str, Path] = {f"{source_kind}_srt": zh_srt, f"{source_kind}_vtt": zh_vtt,
                                 "translated_srt": en_srt, "translated_vtt": en_vtt}
     if config.target_language == "en":
         results["english_srt"] = en_srt
@@ -2118,6 +2194,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     review = {}
     try:
         review = review_subtitles(zh_srt, en_srt, review_path, language=config.target_language,
+                                  source_language=config.source_language,
                                   context=config.context, glossary=config.glossary,
                                   progress=progress)
         results["review_report"] = review_path
@@ -2133,6 +2210,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             progress("Reviewing flagged subtitles with stronger local models…")
             args = [sys.executable, "-m", "anime_dubber.cli", "review-subtitles", str(zh_srt),
                     str(en_srt), "--report", str(review_path), "--target-language", config.target_language,
+                    "--source-language", config.source_language,
                     "--model", config.review_model, "--audio", str(transcript_audio),
                     "--context", config.context, "--glossary-json", json.dumps(config.glossary, ensure_ascii=False)]
             try:
@@ -2153,12 +2231,12 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
                 reasons = set(row.get("reasons", []))
                 if "speech_overlap" in reasons:
                     continue  # Timing rewrites are measured against the actual voice below.
-                proposed = (row.get("asr_translation") if "non_chinese_source" in reasons
+                proposed = (row.get("asr_translation") if reasons & {"non_chinese_source", "source_language_mismatch"}
                             else row.get("suggestion"))
                 proposed = str(proposed or "").strip()
                 if (proposed and proposed.casefold() != str(row.get("translation", "")).casefold()
-                        and (reasons & {"non_chinese_source", "mixed_script_in_source",
-                                        "untranslated_chinese", "untranslated_text", "literal_idiom"})):
+                        and (reasons & {"non_chinese_source", "source_language_mismatch", "mixed_script_in_source",
+                                        "untranslated_chinese", "untranslated_source", "untranslated_text", "literal_idiom"})):
                     decisions[int(row["cue"]) - 1] = proposed
             _atomic_json_write(approval_path, {"signature": review["signature"],
                                                "revisions": {str(k + 1): v for k, v in decisions.items()},
@@ -2185,7 +2263,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
     char_path = _character_map_path(config, out, key)
     if config.mode == "dub" and config.multi_character:
         from .characters import analyze_characters, write_character_map
-        # Analyze against Chinese timestamps. If Whisper-direct translation changed segmentation,
+        # Analyze against source timestamps. If Whisper-direct translation changed segmentation,
         # transfer speaker/style labels to the closest English segment by midpoint overlap.
         profiles, payload = analyze_characters(
             vocals, zh_segments, work, out, runner, progress,
@@ -2193,7 +2271,7 @@ def run_pipeline(config: Config, progress: Optional[ProgressCallback] = None, ru
             speaker_threshold=config.speaker_threshold, series_id=config.series_id or key,
             available_voices=list_macos_voices(), override_path=char_path,
             speaker_backend=config.speaker_backend,
-            make_voice_references=config.auto_voice_references and config.target_language == "en"
+            make_voice_references=config.auto_voice_references
                                   and config.tts_engine in {"auto", "chatterbox"},
         )
         if segments is not zh_segments:

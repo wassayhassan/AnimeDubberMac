@@ -10,6 +10,7 @@ from typing import Any, Dict
 from . import __version__
 from .application import AppEvent, ApplicationService
 from .core import DEFAULT_CONTEXT
+from .languages import TARGET_LANGUAGES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,7 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("source", help="YouTube URL or local video path")
         p.add_argument("-o", "--output", default=str(Path.cwd() / "AnimeDubberOutput"))
         p.add_argument("--series-id", default="")
-        p.add_argument("--target-language", choices=["en", "es", "fr", "de", "ja"], default="en")
+        p.add_argument("--target-language", choices=list(TARGET_LANGUAGES), default="en")
+        p.add_argument("--source-language", default="auto", help="Source language code, or auto to detect it")
         p.add_argument("--dub-name", default="", help="Name of this dub version")
         p.add_argument(
             "--asr",
@@ -116,7 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("source_srt", type=Path, help="Original-language SRT")
     review.add_argument("translated_srt", type=Path, help="Translated SRT with matching cue numbers")
     review.add_argument("-o", "--report", type=Path, default=None, help="JSON report path (defaults to translated SRT with .review.json suffix)")
-    review.add_argument("--target-language", choices=["en", "es", "fr", "de", "ja"], default="en")
+    review.add_argument("--target-language", choices=list(TARGET_LANGUAGES), default="en")
+    review.add_argument("--source-language", default="zh", help="Source language code (default: zh for existing SRT pairs)")
     review.add_argument("--context", default=None, help="Project context for model review")
     review.add_argument("--glossary-json", default=None, help="JSON object with project translation terms")
     review.add_argument("--model", default="", help="Optional MLX model for flagged cues, e.g. mlx-community/Qwen3-8B-4bit")
@@ -135,6 +138,7 @@ def _payload(args: argparse.Namespace) -> Dict[str, Any]:
         "output_dir": str(Path(args.output).expanduser()),
         "series_id": args.series_id,
         "target_language": args.target_language,
+        "source_language": args.source_language,
         "dub_name": args.dub_name,
         "mode": "subtitles" if getattr(args, "subtitles_only", False) else "dub",
         "asr": {
@@ -247,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             report_path = args.report or args.translated_srt.with_suffix(".review.json")
             report = review_subtitles(args.source_srt, args.translated_srt, report_path,
-                                      language=args.target_language, model=args.model,
+                                      language=args.target_language, source_language=args.source_language, model=args.model,
                                       context=args.context or DEFAULT_CONTEXT,
                                       glossary=json.loads(args.glossary_json) if args.glossary_json else None,
                                       audio=args.audio, asr_model=args.asr_model,

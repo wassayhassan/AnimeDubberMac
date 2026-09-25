@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 _MODEL_LOCK = threading.RLock()
 _CHATTERBOX_MODELS: dict[tuple[str, bool], object] = {}
+_MULTILINGUAL_MODELS: dict[str, object] = {}
 _KOKORO_PIPELINES: dict[str, object] = {}
 MIN_CHATTERBOX_REFERENCE_SECONDS = 5.25  # Chatterbox requires strictly more than five seconds.
 
@@ -81,6 +82,10 @@ def chatterbox_available() -> bool:
     return _module_available("chatterbox") and _module_available("torchaudio")
 
 
+def multilingual_chatterbox_available() -> bool:
+    return chatterbox_available() and _module_available("chatterbox.mtl_tts")
+
+
 def kokoro_available() -> bool:
     return _module_available("kokoro") and _module_available("soundfile")
 
@@ -88,6 +93,7 @@ def kokoro_available() -> bool:
 def premium_voice_status() -> dict:
     return {
         "chatterbox": chatterbox_available(),
+        "chatterbox_multilingual": multilingual_chatterbox_available(),
         "kokoro": kokoro_available(),
         "piper": piper_available(),
     }
@@ -322,6 +328,51 @@ def synthesize_chatterbox(
         cancel_check()
     if not out_wav.exists() or out_wav.stat().st_size <= 44:
         raise RuntimeError("Chatterbox completed without producing usable audio.")
+
+
+def synthesize_multilingual_chatterbox(
+    text: str, out_wav: Path, *, language: str, reference_audio: str = "",
+    expressiveness: float = 0.5, device: str = "auto",
+    cancel_check: Callable[[], None] | None = None,
+) -> None:
+    """Dub in a supported target language with optional character voice reference."""
+    if not multilingual_chatterbox_available():
+        raise RuntimeError("Chatterbox Multilingual is not installed. Update chatterbox-tts or choose ElevenLabs.")
+    if cancel_check:
+        cancel_check()
+    ref = str(reference_audio or "").strip()
+    if ref:
+        ref_path = Path(ref).expanduser().resolve()
+        if not ref_path.is_file() or reference_audio_duration(ref_path) < MIN_CHATTERBOX_REFERENCE_SECONDS:
+            raise RuntimeError("Chatterbox needs a valid reference with more than five seconds of speech.")
+        ref = str(ref_path)
+
+    import torchaudio as ta
+    device = _best_torch_device(device)
+    with _MODEL_LOCK:
+        model = _MULTILINGUAL_MODELS.get(device)
+        if model is None:
+            _prepare_chatterbox_watermarker()
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+            try:
+                model = ChatterboxMultilingualTTS.from_pretrained(device=device, t3_model="v3")
+            except TypeError:
+                model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+            _MULTILINGUAL_MODELS[device] = model
+        if cancel_check:
+            cancel_check()
+        kwargs = {"language_id": language, "exaggeration": max(0.0, min(1.5, float(expressiveness)))}
+        if ref:
+            kwargs["audio_prompt_path"] = ref
+            # Resemble's documented mitigation for transferring a source accent.
+            kwargs["cfg_weight"] = 0.0
+        wav = model.generate(str(text), **kwargs)
+    out_wav.parent.mkdir(parents=True, exist_ok=True)
+    ta.save(str(out_wav), wav.detach().cpu(), int(model.sr))
+    if cancel_check:
+        cancel_check()
+    if not out_wav.exists() or out_wav.stat().st_size <= 44:
+        raise RuntimeError("Chatterbox Multilingual completed without producing usable audio.")
 
 
 def _load_kokoro(lang_code: str = "a"):

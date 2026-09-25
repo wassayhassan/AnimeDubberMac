@@ -335,8 +335,8 @@ final class AppState: ObservableObject {
             return "Automatic subtitle correction needs a local translation model. Change the translation provider in Advanced settings."
         }
         if targetLanguage != "en" {
-            if voiceProvider != .elevenlabs || elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return "Dubbing this language needs an ElevenLabs voice and API key. Set it up in Settings, or choose English."
+            if ![VoiceProvider.auto, .chatterbox, .elevenlabs].contains(voiceProvider) {
+                return "Choose Automatic, Chatterbox, or ElevenLabs voices for this language in Settings."
             }
             if translationProvider == .whisper {
                 return "Choose a local translation model in Advanced settings for this language."
@@ -391,6 +391,7 @@ final class AppState: ObservableObject {
             "series_id": project.seriesID,
             "mode": outputMode.rawValue,
             "target_language": targetLanguage,
+            "source_language": "auto",
             "dub_name": dubName,
             "asr": [
                 "provider": asrProvider.rawValue,
@@ -887,6 +888,12 @@ final class AppState: ObservableObject {
             }
             if targetLanguage == "en" && voiceProvider != .auto && voiceProvider != .elevenlabs && voices[voiceProvider.rawValue] != true {
                 missing.append("selected voice engine")
+            }
+            if targetLanguage != "en" && voiceProvider == .chatterbox && voices["chatterbox_multilingual"] != true {
+                missing.append("Chatterbox Multilingual")
+            }
+            if targetLanguage != "en" && voiceProvider == .auto && voices["chatterbox_multilingual"] != true && elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                missing.append("Chatterbox Multilingual or ElevenLabs API key")
             }
             if !missing.isEmpty {
                 failQuickStart("Setup needed: \(missing.joined(separator: ", ")). Open System Check for details, then retry.")

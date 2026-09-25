@@ -58,6 +58,9 @@ if ! python -m pip install "speechbrain>=1.0,<2"; then
   echo "WARNING: SpeechBrain could not be installed. AnimeDubber will use its acoustic speaker-clustering fallback."
 fi
 
+echo "Installing local dubbing voices for supported target languages…"
+/bin/zsh macos/install_voice_engines.sh --no-rebuild
+
 echo "Running post-install source preflight…"
 python verify_source.py
 
@@ -100,6 +103,4 @@ fi
 echo
 echo "Setup complete."
 echo "CLI: .venv/bin/python -m anime_dubber.cli --help"
-echo
-echo "For Chatterbox Turbo + Kokoro premium local voices, run:"
-echo "  /bin/zsh macos/install_voice_engines.sh"
+echo "Run /bin/zsh macos/install_voice_engines.sh later to update local voice engines."

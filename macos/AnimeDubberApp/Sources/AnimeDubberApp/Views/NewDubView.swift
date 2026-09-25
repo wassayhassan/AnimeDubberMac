@@ -61,6 +61,12 @@ struct NewDubView: View {
                         Text("French").tag("fr")
                         Text("German").tag("de")
                         Text("Japanese").tag("ja")
+                        Text("Korean").tag("ko")
+                        Text("Chinese").tag("zh")
+                        Text("Portuguese").tag("pt")
+                        Text("Italian").tag("it")
+                        Text("Hindi").tag("hi")
+                        Text("Arabic").tag("ar")
                     }.labelsHidden()
                 }
                 if state.outputMode == .dub {
@@ -166,7 +172,7 @@ struct NewDubView: View {
                     }
                 }
 
-                if state.detectCharacters && state.outputMode == .dub && state.targetLanguage == "en" &&
+                if state.detectCharacters && state.outputMode == .dub &&
                     (state.voiceProvider == .chatterbox || state.voiceProvider == .auto) {
                     settingRow("Source voices") {
                         Toggle("Choose character voice clips automatically", isOn: $state.autoSourceVoices)
@@ -177,7 +183,7 @@ struct NewDubView: View {
                 }
 
                 if state.targetLanguage != "en" {
-                    Text("Other languages use an LLM or Ollama for translation. Dubbing currently requires an ElevenLabs multilingual voice; subtitles work without one.")
+                    Text("Automatic voices use Chatterbox Multilingual when installed, with ElevenLabs as an alternative. Local LLM or Ollama handles translation.")
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 8)

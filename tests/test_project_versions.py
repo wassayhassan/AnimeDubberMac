@@ -266,10 +266,12 @@ class ProjectVersionsTests(unittest.TestCase):
     def test_non_english_voice_constraints_are_explicit(self):
         with tempfile.TemporaryDirectory() as temp:
             service = ApplicationService()
-            with self.assertRaisesRegex(ValueError, "ElevenLabs"):
-                service.run_sync({"source": "source.mp4", "output_dir": temp, "target_language": "es", "tts": {"provider": "chatterbox"}})
+            self.assertEqual(service.capabilities()["providers"]["tts"]["chatterbox_multilingual"],
+                             __import__("anime_dubber.providers.tts", fromlist=["multilingual_chatterbox_available"]).multilingual_chatterbox_available())
+            with self.assertRaisesRegex(ValueError, "Chatterbox Multilingual or ElevenLabs"):
+                service.run_sync({"source": "source.mp4", "output_dir": temp, "target_language": "es", "tts": {"provider": "kokoro"}})
             with self.assertRaisesRegex(ValueError, "Whisper direct"):
-                service.run_sync({"source": "source.mp4", "output_dir": temp, "target_language": "es", "mode": "subtitles", "translation": {"provider": "whisper"}})
+                service.run_sync({"source": "source.mp4", "output_dir": temp, "source_language": "zh", "target_language": "es", "mode": "subtitles", "translation": {"provider": "whisper"}})
 
 
 if __name__ == "__main__":

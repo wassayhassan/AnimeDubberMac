@@ -25,6 +25,7 @@ from ..core import (
     run_pipeline,
     _atomic_json_write,
 )
+from ..languages import TARGET_LANGUAGES
 from .events import AppEvent, progress_to_event
 from .jobs import JobRecord
 from .project import ProjectStore, get_project as load_project, list_projects as list_project_manifests
@@ -73,8 +74,11 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
     if not output_dir:
         raise ValueError("output_dir is required")
     target_language = str(data.get("target_language") or "en").lower()
-    if target_language not in {"en", "es", "fr", "de", "ja"}:
-        raise ValueError("Supported target languages: en, es, fr, de, ja")
+    if target_language not in TARGET_LANGUAGES:
+        raise ValueError("Supported target languages: " + ", ".join(TARGET_LANGUAGES))
+    source_language = str(data.get("source_language") or "auto").lower()
+    if source_language != "auto" and (not source_language.isalpha() or len(source_language) not in (2, 3)):
+        raise ValueError("Source language must be Auto or a language code such as zh, ja, ko, es, or en")
 
     asr_provider = str(asr.get("provider") or data.get("asr_provider") or "auto")
 
@@ -99,6 +103,7 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         output_dir=Path(output_dir).expanduser(),
         mode=str(data.get("mode") or "dub"),
         target_language=target_language,
+        source_language=source_language,
         asr_provider=asr_provider,
         mlx_whisper_model=str(asr.get("mlx_model", data.get("mlx_whisper_model", "mlx-community/whisper-large-v3-mlx")) or "mlx-community/whisper-large-v3-mlx"),
         faster_whisper_model=str(asr.get("model", data.get("faster_whisper_model", "large-v3")) or "large-v3"),
@@ -130,7 +135,8 @@ def config_from_dict(payload: Dict[str, Any]) -> Config:
         piper_speaker=int(tts.get("piper_speaker", data.get("piper_speaker", -1))),
         tts_rate=int(tts.get("rate", data.get("tts_rate", 210))),
         context=str(data.get("context") or data.get("series_context") or DEFAULT_CONTEXT),
-        glossary=dict(data.get("glossary") or DEFAULT_GLOSSARY),
+        glossary=dict(DEFAULT_GLOSSARY if data.get("glossary") is None and source_language == "zh"
+                      else data.get("glossary") or {}),
         keep_work=bool(data.get("keep_work", True)),
         resume=bool(data.get("resume", True)),
         force=bool(data.get("force", False)),
@@ -171,6 +177,7 @@ class ApplicationService:
         faster_ok = _module_available("faster_whisper")
         piper_ok = bool(shutil.which("piper")) or _module_available("piper")
         chatterbox_ok = _module_available("chatterbox") and _module_available("torchaudio")
+        multilingual_ok = chatterbox_ok and _module_available("chatterbox.mtl_tts")
         kokoro_ok = _module_available("kokoro") and _module_available("soundfile")
         ollama_ok = bool(shutil.which("ollama"))
 
@@ -188,6 +195,7 @@ class ApplicationService:
                 },
                 "tts": {
                     "chatterbox": chatterbox_ok,
+                    "chatterbox_multilingual": multilingual_ok,
                     "kokoro": kokoro_ok,
                     "macos": system == "Darwin" and bool(shutil.which("say")),
                     "piper": piper_ok,
@@ -240,6 +248,12 @@ class ApplicationService:
                 "name": "Chatterbox Turbo",
                 "ok": bool(caps["providers"]["tts"]["chatterbox"]),
                 "detail": "available" if caps["providers"]["tts"]["chatterbox"] else "optional; run macos/install_voice_engines.sh",
+                "optional": True,
+            })
+            checks.append({
+                "name": "Chatterbox Multilingual",
+                "ok": multilingual_ok,
+                "detail": "available" if multilingual_ok else "optional; run macos/install_voice_engines.sh",
                 "optional": True,
             })
             checks.append({
@@ -319,11 +333,10 @@ class ApplicationService:
         store = ProjectStore(config.output_dir, config.source)
         if not config.series_id:
             config.series_id = str(store.load().get("series_id") or "")
-        if config.target_language != "en" and config.translation == "whisper":
-            raise ValueError("Whisper direct translation only supports English. Choose LLM or Ollama.")
-        if config.mode == "dub" and config.target_language != "en":
-            if config.tts_engine != "elevenlabs":
-                raise ValueError("Non-English dubbing currently requires ElevenLabs multilingual voices. Choose ElevenLabs or generate subtitles only.")
+        if config.mode == "dub" and config.target_language != "en" and config.tts_engine not in {"auto", "chatterbox", "elevenlabs"}:
+            raise ValueError("This target language needs Chatterbox Multilingual or ElevenLabs.")
+        if config.translation == "whisper" and config.target_language != "en" and config.source_language not in {"auto", config.target_language}:
+            raise ValueError("Whisper direct translation only supports English; choose an LLM or Ollama.")
         job_id = "job_" + uuid.uuid4().hex[:12]
         dub_id = "dub_" + uuid.uuid4().hex[:12] if not analysis and config.mode == "dub" else ""
         config.version_id = dub_id or ("sub_" + uuid.uuid4().hex[:12] if not analysis else "")
@@ -358,11 +371,10 @@ class ApplicationService:
         store = ProjectStore(config.output_dir, config.source)
         if not config.series_id:
             config.series_id = str(store.load().get("series_id") or "")
-        if config.target_language != "en" and config.translation == "whisper":
-            raise ValueError("Whisper direct translation only supports English. Choose LLM or Ollama.")
-        if config.mode == "dub" and config.target_language != "en":
-            if config.tts_engine != "elevenlabs":
-                raise ValueError("Non-English dubbing currently requires ElevenLabs multilingual voices. Choose ElevenLabs or generate subtitles only.")
+        if config.mode == "dub" and config.target_language != "en" and config.tts_engine not in {"auto", "chatterbox", "elevenlabs"}:
+            raise ValueError("This target language needs Chatterbox Multilingual or ElevenLabs.")
+        if config.translation == "whisper" and config.target_language != "en" and config.source_language not in {"auto", config.target_language}:
+            raise ValueError("Whisper direct translation only supports English; choose an LLM or Ollama.")
         job_id = "job_" + uuid.uuid4().hex[:12]
         dub_id = "dub_" + uuid.uuid4().hex[:12] if not analysis and config.mode == "dub" else ""
         config.version_id = dub_id or ("sub_" + uuid.uuid4().hex[:12] if not analysis else "")
