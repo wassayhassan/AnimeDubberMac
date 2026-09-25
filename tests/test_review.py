@@ -110,9 +110,9 @@ class ReviewTests(unittest.TestCase):
                 resumed = run_pipeline(cfg, lambda _: None, CommandRunner())
             self.assertEqual(candidate.call_count, 2)
             self.assertEqual(tested, [original, "The Tang Sect", "Tang Sect", "Tang Sect"])
-            self.assertIn("Tang Sect", result["translated_srt"].read_text())
-            self.assertIn("Tang Sect", resumed["translated_srt"].read_text())
-            fixes = json.loads(next((base / "out" / "versions" / "auto_fit").glob("*.timing-fixes.json")).read_text())
+            self.assertIn("Tang Sect", result["translated_srt"].read_text(encoding="utf-8"))
+            self.assertIn("Tang Sect", resumed["translated_srt"].read_text(encoding="utf-8"))
+            fixes = json.loads(next((base / "out" / "versions" / "auto_fit").glob("*.timing-fixes.json")).read_text(encoding="utf-8"))
             self.assertEqual(fixes["1"]["replacement"], "Tang Sect")
 
     def test_timing_candidate_keeps_names_and_numbers(self):
@@ -160,8 +160,8 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(calls, [("The once famous Tang Sect", 1.0),
                                      ("The once famous Tang Sect", 1.5),
                                      ("The once famous Tang Sect", 1.5)])
-            self.assertIn("The once famous Tang Sect", result["translated_srt"].read_text())
-            fixes = json.loads(next((base / "out" / "versions" / "tempo").glob("*.timing-fixes.json")).read_text())
+            self.assertIn("The once famous Tang Sect", result["translated_srt"].read_text(encoding="utf-8"))
+            fixes = json.loads(next((base / "out" / "versions" / "tempo").glob("*.timing-fixes.json")).read_text(encoding="utf-8"))
             self.assertEqual(fixes["1"]["max_tempo"], 1.5)
 
     def test_rewriter_requests_measured_gap_and_checks_candidate(self):
@@ -220,7 +220,7 @@ class ReviewTests(unittest.TestCase):
                 resumed = run_pipeline(cfg, warnings.append, runner)
             self.assertEqual(generated, ["A long greeting"] * 4)
             self.assertTrue(any("cannot fit" in message for message in warnings))
-            self.assertIn("A long greeting", result["translated_srt"].read_text())
+            self.assertIn("A long greeting", result["translated_srt"].read_text(encoding="utf-8"))
             self.assertTrue(resumed["dubbed_video"].exists())
 
     def test_flags_source_and_translation_without_changing_srt(self):
@@ -238,7 +238,7 @@ class ReviewTests(unittest.TestCase):
             self.assertIn("mixed_script_in_source", result["flags"][1]["reasons"])
             self.assertIn("untranslated_chinese", result["flags"][1]["reasons"])
             self.assertEqual(before, translated.read_bytes())
-            self.assertEqual(json.loads(report.read_text())["flags"], result["flags"])
+            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["flags"], result["flags"])
 
     def test_review_resume_skips_completed_model_suggestions(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -387,7 +387,7 @@ class ReviewTests(unittest.TestCase):
             def model_review(command, **_kwargs):
                 self.assertIn("review-subtitles", command)
                 report = Path(command[command.index("--report") + 1])
-                data = json.loads(report.read_text())
+                data = json.loads(report.read_text(encoding="utf-8"))
                 data["flags"][0]["suggestion"] = "Behold"
                 data["flags"][0]["asr_candidate"] = "你"
                 data["flags"][0]["asr_translation"] = "You"
@@ -416,21 +416,21 @@ class ReviewTests(unittest.TestCase):
                  patch("anime_dubber.core.mux_video", side_effect=lambda _v, _a, dest, *_: dest.write_bytes(b"video")):
                 result = run_pipeline(config, lambda _: None, runner)
                 report = next((base / "out" / "versions" / "dub_review").glob("*.review.json"))
-                data = json.loads(report.read_text())
+                data = json.loads(report.read_text(encoding="utf-8"))
                 approval = report.with_name(report.name.replace(".review.json", ".review-approval.json"))
-                saved = json.loads(approval.read_text())
+                saved = json.loads(approval.read_text(encoding="utf-8"))
                 self.assertEqual(saved["signature"], data["signature"])
                 self.assertEqual(saved["revisions"], {"1": "You"})
                 runner.run = lambda *_args, **_kwargs: self.fail("Model must not run after approval")
                 run_pipeline(config, lambda _: None, runner)
-                self.assertIn("You", result["translated_srt"].read_text())
+                self.assertIn("You", result["translated_srt"].read_text(encoding="utf-8"))
                 approval.unlink()
                 report.unlink()
                 runner.run = lambda *_args, **_kwargs: (_ for _ in ()).throw(PipelineError("Model unavailable"))
                 warning_messages = []
                 fallback = run_pipeline(config, warning_messages.append, runner)
             self.assertEqual(clips, ["You", "You", "Behold"])
-            self.assertIn("Behold", fallback["translated_srt"].read_text())
+            self.assertIn("Behold", fallback["translated_srt"].read_text(encoding="utf-8"))
             self.assertTrue(any("stronger subtitle review failed" in msg for msg in warning_messages))
 
 
