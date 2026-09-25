@@ -174,7 +174,7 @@ struct DubDetailsView: View {
                                             }.buttonStyle(.link)
                                         }
                                         if !cue.error.isEmpty { Text(cue.error).font(.caption).foregroundStyle(.orange) }
-                                        if cue.reasons.contains("non_chinese_source") {
+                                        if cue.reasons.contains("non_chinese_source") || cue.reasons.contains("source_language_mismatch") {
                                             Text("The two speech passes disagree. Compare the translated options and the scene. The alternate is an uncertain guess, especially for a very short cue.")
                                                 .font(.caption).foregroundStyle(.orange)
                                             if !cue.alternateEnglish.isEmpty {
@@ -244,7 +244,7 @@ struct DubDetailsView: View {
                             }
                             ForEach(["english_srt", "target_srt", "chinese_srt", "source_srt", "english_vtt"], id: \.self) { kind in
                                 if let path = dub.artifacts[kind] {
-                                    ArtifactLink(title: kind.contains("chinese") ? "Original subtitles" : "Translated subtitles", path: path)
+                                    ArtifactLink(title: ["chinese_srt", "source_srt"].contains(kind) ? "Original subtitles" : "Translated subtitles", path: path)
                                 }
                             }
                             DisclosureGroup("Technical files", isExpanded: $filesExpanded) {
